@@ -524,6 +524,7 @@ def backfill_single_bot(bot: Beta1BotConfig) -> dict[str, Any]:
                 holdings_json=json.dumps(payload),
                 bot_type=BOT_TYPE_BETA1,
                 origin=origin,
+                source=BOT_EQUITY_SOURCE_BACKFILL,
             )
         )
 

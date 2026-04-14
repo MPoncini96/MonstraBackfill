@@ -346,6 +346,7 @@ def backfill_single_bot(bot: Gamma1BotConfig) -> dict[str, Any]:
                 holdings_json=json.dumps(payload),
                 bot_type=BOT_TYPE_GAMMA1,
                 origin=origin,
+                source=BOT_EQUITY_SOURCE_BACKFILL,
             )
         )
         processed += 1

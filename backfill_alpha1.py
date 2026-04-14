@@ -911,6 +911,7 @@ def backfill_single_bot(bot: Alpha1BotConfig) -> dict[str, Any]:
                     holdings_json=holdings_json,
                     bot_type=BOT_TYPE_ALPHA1,
                     origin=origin,
+                    source=BOT_EQUITY_SOURCE_BACKFILL,
                 )
             )
 
