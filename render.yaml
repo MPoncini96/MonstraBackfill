@@ -1,0 +1,14 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# Deploy as a Web Service with root directory = this repo folder (MonstraBackfill).
+
+services:
+  - type: web
+    name: monstra-backfill
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: MONSTRA_PREVIEW_SERVICE
+        value: "1"
+      - key: MONSTRA_PREVIEW_SECRET
+        generateValue: true
