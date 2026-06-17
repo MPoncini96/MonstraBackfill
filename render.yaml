@@ -12,3 +12,7 @@ services:
         value: "1"
       - key: MONSTRA_PREVIEW_SECRET
         generateValue: true
+      # Required by /backfill/* endpoints (reading bot configs, writing bot_equity rows).
+      # Preview-only routes (/preview/*) do not require this to be set.
+      - key: DATABASE_URL
+        sync: false

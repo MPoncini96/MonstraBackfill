@@ -423,7 +423,7 @@ def run_alpha1(
     Live Alpha1 signal generator using the same daily strategy rules as backfill_alpha1.
 
     Args:
-        bot_id: one of {bellator, imperium, medicus, vectura, vis}
+        bot_id: one of {bellitus, bellator, imperium, medicus, vectura, vis}
     """
     ts = datetime.now(timezone.utc)
     config, history_period_config = _build_live_config(bot_id, use_db_config=use_db_config)

@@ -333,9 +333,18 @@ def build_gamma1_score_table(
 
 
 def get_gamma1_rebalance_dates(prices_index: pd.DatetimeIndex, rebalance_rule: str) -> list[pd.Timestamp]:
-    stub = pd.DataFrame(index=prices_index, data={"_": 0.0})
-    rebal = stub.resample(rebalance_rule).last().index
-    return [d for d in rebal if d in prices_index]
+    if prices_index.empty:
+        return []
+
+    normalized_index = pd.DatetimeIndex(prices_index).normalize()
+    stub = pd.DataFrame(index=normalized_index, data={"_": 0.0})
+    rebal = stub.resample(rebalance_rule).last().dropna().index
+
+    actual_by_day: dict[pd.Timestamp, pd.Timestamp] = {}
+    for ts in pd.DatetimeIndex(prices_index):
+        actual_by_day[ts.normalize()] = ts
+
+    return [actual_by_day[d.normalize()] for d in rebal if d.normalize() in actual_by_day]
 
 
 def download_gamma1_prices(

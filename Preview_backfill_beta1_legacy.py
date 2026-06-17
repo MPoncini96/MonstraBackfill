@@ -1,8 +1,23 @@
 #!/usr/bin/env python
+# =============================================================================
+# LEGACY SNAPSHOT — Preview_backfill_beta1_legacy.py
+# =============================================================================
+# This file is a preserved copy of Preview_backfill_beta1.py as it existed
+# BEFORE the composite-scoring redesign of the Beta1 strategy (captured 2026-06-16).
+#
+# PURPOSE:
+#   - Historical reference for the original confirmation-threshold approach.
+#   - Comparison baseline against the new composite scoring framework.
+#   - Rollback target if the new strategy needs to be reverted.
+#
+# DO NOT MODIFY THIS FILE.
+# Future Beta1 development must target Preview_backfill_beta1.py, NOT this file.
+# Changes here would corrupt the historical snapshot.
+# =============================================================================
+
 from __future__ import annotations
 
 import json
-import logging
 import os
 import sys
 import tempfile
@@ -25,9 +40,7 @@ import yfinance.cache as yf_cache
 yf_cache.set_cache_location(YFINANCE_CACHE_DIR)
 yf_cache.set_tz_cache_location(YFINANCE_CACHE_DIR)
 
-logger = logging.getLogger("beta1_preview")
-
-from backfill_beta1 import (
+from backfill_beta1_legacy import (
     ENTRY_THRESHOLD,
     EXIT_THRESHOLD,
     FALLBACK_TICKER,
@@ -68,16 +81,6 @@ def run_preview(preview: PreviewConfig) -> dict[str, Any]:
     if not preview.universe:
         raise ValueError("At least one universe ticker is required.")
 
-    logger.info(
-        "Running beta1 preview state_start=%s end=%s universe=%s max_holdings=%d entry=%.4f exit=%.4f fallback=%s",
-        START_DATE,
-        END_DATE,
-        ",".join(preview.universe),
-        preview.max_holdings,
-        preview.entry_threshold,
-        preview.exit_threshold,
-        preview.fallback_ticker,
-    )
     result = run_backtest(
         universe=preview.universe,
         start=START_DATE,
@@ -98,7 +101,6 @@ def run_preview(preview: PreviewConfig) -> dict[str, Any]:
                 "ret": float(week_ret),
                 "holdings": holdings,
                 "meta": {
-                    "state_start_date": START_DATE,
                     "entry_threshold": float(preview.entry_threshold),
                     "exit_threshold": float(preview.exit_threshold),
                     "max_holdings": int(preview.max_holdings),
@@ -109,15 +111,6 @@ def run_preview(preview: PreviewConfig) -> dict[str, Any]:
 
     final_equity = rows[-1]["equity"] if rows else 1.0
     final_return_pct = (final_equity - 1.0) * 100.0
-    logger.info(
-        "Completed beta1 preview state_start=%s end=%s universe=%s processed_weeks=%d final_equity=%.6f final_return_pct=%.2f",
-        START_DATE,
-        END_DATE,
-        ",".join(preview.universe),
-        len(rows),
-        final_equity,
-        final_return_pct,
-    )
 
     return {
         "success": True,

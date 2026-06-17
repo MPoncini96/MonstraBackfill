@@ -1,10 +1,31 @@
+# =============================================================================
+# LEGACY SNAPSHOT — bots/beta1_legacy.py
+# =============================================================================
+# This file is a preserved copy of bots/beta1.py as it existed BEFORE the
+# composite-scoring redesign of the Beta1 strategy (captured 2026-06-16).
+#
+# PURPOSE:
+#   - Historical reference for the original confirmation-threshold approach.
+#   - Comparison baseline against the new composite scoring framework.
+#   - Rollback target if the new strategy needs to be reverted.
+#
+# The original Beta1 approach uses a two-consecutive-week confirmation signal:
+#   - BUY  when r2 > threshold AND r1 > threshold (two positive weeks)
+#   - SELL when r2 < threshold AND r1 < threshold (two negative weeks)
+#   - Positions are scored by strength_score = r2 + r1 and ranked by score.
+#
+# DO NOT MODIFY THIS FILE.
+# Future Beta1 development must target bots/beta1.py, NOT this file.
+# Changes here would corrupt the historical snapshot.
+# =============================================================================
+
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from beta1_shared import (
+from beta1_legacy_shared import (
     Beta1Config,
     normalize_universe as _normalize_universe,
     resolve_beta1_state_start_date,
@@ -20,7 +41,7 @@ EXIT_THRESHOLD = 0.0
 MAX_HOLDINGS = 4
 FALLBACK_TICKER = "VOO"
 STATE_START_DATE = resolve_beta1_state_start_date()
-logger = logging.getLogger("beta1_live")
+logger = logging.getLogger("beta1_legacy_live")
 
 
 class Beta1ConfigError(RuntimeError):
@@ -85,7 +106,7 @@ def run_beta1(bot_id: str = "beta1", use_db_config: bool = True) -> dict:
         config = _build_live_config(bot_id, use_db_config=use_db_config)
         start, end = _resolve_download_window()
         logger.info(
-            "Running live beta1 bot_id=%s state_start=%s end=%s universe=%s",
+            "Running live beta1_legacy bot_id=%s state_start=%s end=%s universe=%s",
             bot_id,
             start,
             end,
@@ -96,7 +117,7 @@ def run_beta1(bot_id: str = "beta1", use_db_config: bool = True) -> dict:
         signal = "REBALANCE"
         note = f"As of {asof}: weekly beta1 rebalance"
         logger.info(
-            "Completed live beta1 bot_id=%s state_start=%s asof=%s apply_date=%s weights=%s",
+            "Completed live beta1_legacy bot_id=%s state_start=%s asof=%s apply_date=%s weights=%s",
             bot_id,
             start,
             asof,
@@ -120,12 +141,12 @@ def run_beta1(bot_id: str = "beta1", use_db_config: bool = True) -> dict:
                 "max_holdings": config.max_holdings,
                 "fallback_ticker": config.fallback_ticker,
                 "target_weights": target_weights,
-            },
+                },
         }
 
     except Beta1ConfigError as exc:
         logger.error(
-            "Refusing live beta1 bot_id=%s state_start=%s reason=%s",
+            "Refusing live beta1_legacy bot_id=%s state_start=%s reason=%s",
             bot_id,
             STATE_START_DATE,
             exc,
@@ -144,7 +165,7 @@ def run_beta1(bot_id: str = "beta1", use_db_config: bool = True) -> dict:
         }
     except Exception as exc:
         logger.exception(
-            "Live beta1 failed bot_id=%s state_start=%s",
+            "Live beta1_legacy failed bot_id=%s state_start=%s",
             bot_id,
             STATE_START_DATE,
         )

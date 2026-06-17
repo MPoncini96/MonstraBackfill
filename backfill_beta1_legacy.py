@@ -1,4 +1,20 @@
 #!/usr/bin/env python
+# =============================================================================
+# LEGACY SNAPSHOT — backfill_beta1_legacy.py
+# =============================================================================
+# This file is a preserved copy of backfill_beta1.py as it existed BEFORE the
+# composite-scoring redesign of the Beta1 strategy (captured 2026-06-16).
+#
+# PURPOSE:
+#   - Historical reference for the original confirmation-threshold approach.
+#   - Comparison baseline against the new composite scoring framework.
+#   - Rollback target if the new strategy needs to be reverted.
+#
+# DO NOT MODIFY THIS FILE.
+# Future Beta1 development must target backfill_beta1.py, NOT this file.
+# Changes here would corrupt the historical snapshot.
+# =============================================================================
+
 from __future__ import annotations
 
 import json
@@ -13,9 +29,9 @@ import numpy as np
 import pandas as pd
 from psycopg2.extras import execute_values
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from beta1_shared import (
+from beta1_legacy_shared import (
     clean_ticker as _clean_ticker,
     compute_weekly_returns,
     download_weekly_close,
@@ -47,7 +63,7 @@ logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
     format="%(asctime)s | %(levelname)s | %(message)s",
 )
-logger = logging.getLogger("beta1_backfill")
+logger = logging.getLogger("beta1_legacy_backfill")
 
 
 @dataclass
@@ -242,7 +258,7 @@ def _weights_for_date(weights_history: pd.DataFrame, target_date: pd.Timestamp) 
 
 def backfill_single_bot(bot: Beta1BotConfig) -> dict[str, Any]:
     logger.info(
-        "Starting beta1 backfill bot_id=%s state_start=%s end=%s universe=%s max_holdings=%d entry=%.4f exit=%.4f fallback=%s",
+        "Starting beta1_legacy backfill bot_id=%s state_start=%s end=%s universe=%s max_holdings=%d entry=%.4f exit=%.4f fallback=%s",
         bot.bot_id,
         START_DATE,
         END_DATE,
@@ -255,7 +271,7 @@ def backfill_single_bot(bot: Beta1BotConfig) -> dict[str, Any]:
 
     if not bot.universe:
         logger.warning(
-            "Skipping beta1 backfill bot_id=%s state_start=%s because universe is empty",
+            "Skipping beta1_legacy backfill bot_id=%s state_start=%s because universe is empty",
             bot.bot_id,
             START_DATE,
         )
@@ -369,7 +385,7 @@ def backfill_beta1() -> None:
                 }
             )
 
-    logger.info("========== Beta1 Backfill Summary ==========")
+    logger.info("========== Beta1 Legacy Backfill Summary ==========")
     for r in results:
         if r.get("skipped"):
             logger.info(
@@ -388,7 +404,7 @@ def backfill_beta1() -> None:
                 r["errors"],
             )
 
-    logger.info("Beta1 backfill complete.")
+    logger.info("Beta1 legacy backfill complete.")
 
 
 if __name__ == "__main__":
