@@ -185,4 +185,64 @@ def _run_backfill(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.post("/preview/alpha1")
-def post_preview_al
+def post_preview_alpha1(
+    payload: dict[str, Any],
+    _: None = Depends(verify_preview_auth),
+) -> dict[str, Any]:
+    return _run("alpha1", payload)
+
+
+@app.post("/preview/alpha2")
+def post_preview_alpha2(
+    payload: dict[str, Any],
+    _: None = Depends(verify_preview_auth),
+) -> dict[str, Any]:
+    return _run("alpha2", payload)
+
+
+@app.post("/preview/beta1")
+def post_preview_beta1(
+    payload: dict[str, Any],
+    _: None = Depends(verify_preview_auth),
+) -> dict[str, Any]:
+    return _run("beta1", payload)
+
+
+@app.post("/preview/gamma1")
+def post_preview_gamma1(
+    payload: dict[str, Any],
+    _: None = Depends(verify_preview_auth),
+) -> dict[str, Any]:
+    return _run("gamma1", payload)
+
+
+@app.post("/backfill/alpha1")
+def post_backfill_alpha1(
+    payload: dict[str, Any],
+    _: None = Depends(verify_preview_auth),
+) -> dict[str, Any]:
+    return _run_backfill("alpha1", payload)
+
+
+@app.post("/backfill/alpha2")
+def post_backfill_alpha2(
+    payload: dict[str, Any],
+    _: None = Depends(verify_preview_auth),
+) -> dict[str, Any]:
+    return _run_backfill("alpha2", payload)
+
+
+@app.post("/backfill/beta1")
+def post_backfill_beta1(
+    payload: dict[str, Any],
+    _: None = Depends(verify_preview_auth),
+) -> dict[str, Any]:
+    return _run_backfill("beta1", payload)
+
+
+@app.post("/backfill/gamma1")
+def post_backfill_gamma1(
+    payload: dict[str, Any],
+    _: None = Depends(verify_preview_auth),
+) -> dict[str, Any]:
+    return _run_backfill("gamma1", payload)
