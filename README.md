@@ -1,11 +1,11 @@
 # MonstraBackfill
 
-HTTP service for **bot creation previews** (alpha1, alpha2, beta1, gamma1). Deploy to [Render](https://render.com) or any Python host; point the Next.js app at it with environment variables (see below).
+HTTP service for **bot creation previews** (alpha1, alpha2, gamma1). Deploy to [Render](https://render.com) or any Python host; point the Next.js app at it with environment variables (see below).
 
 ## Endpoints
 
 - `GET /health` — liveness
-- `POST /preview/alpha1` | `alpha2` | `beta1` | `gamma1` — same JSON body as the Next.js `/api/bots/preview-*` routes
+- `POST /preview/alpha1` | `alpha2` | `gamma1` — same JSON body as the Next.js `/api/bots/preview-*` routes
 
 Optional auth: set `MONSTRA_PREVIEW_SECRET` and send `Authorization: Bearer <secret>`.
 

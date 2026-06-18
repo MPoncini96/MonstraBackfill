@@ -200,14 +200,6 @@ def post_preview_alpha2(
     return _run("alpha2", payload)
 
 
-@app.post("/preview/beta1")
-def post_preview_beta1(
-    payload: dict[str, Any],
-    _: None = Depends(verify_preview_auth),
-) -> dict[str, Any]:
-    return _run("beta1", payload)
-
-
 @app.post("/preview/gamma1")
 def post_preview_gamma1(
     payload: dict[str, Any],
@@ -230,14 +222,6 @@ def post_backfill_alpha2(
     _: None = Depends(verify_preview_auth),
 ) -> dict[str, Any]:
     return _run_backfill("alpha2", payload)
-
-
-@app.post("/backfill/beta1")
-def post_backfill_beta1(
-    payload: dict[str, Any],
-    _: None = Depends(verify_preview_auth),
-) -> dict[str, Any]:
-    return _run_backfill("beta1", payload)
 
 
 @app.post("/backfill/gamma1")

@@ -41,7 +41,7 @@ class AlgorithmEntry:
     display_name:
         Human-readable algorithm name shown in logs and error messages.
     alias:
-        Short marketing alias (e.g. "Force", "Phantom").  Used in UI copy.
+        Short marketing alias (e.g. "Force", "Vex").  Used in UI copy.
     worker_minute_offset:
         Which minute past the hour the worker fires this algorithm's signal
         cycle (1 = xx:01 UTC, 2 = xx:02, …).  Must be unique across entries.
@@ -110,18 +110,6 @@ ALGORITHM_REGISTRY: tuple[AlgorithmEntry, ...] = (
         status="active",
     ),
     AlgorithmEntry(
-        slug="beta1",
-        display_name="Phantom",
-        alias="Phantom",
-        worker_minute_offset=3,
-        fallback_bot_ids=["beta1"],
-        backfill_enabled=False,
-        live_enabled=False,
-        brokerage_eligible=False,
-        user_creatable=False,
-        status="deprecated",
-    ),
-    AlgorithmEntry(
         slug="gamma1",
         display_name="Vex",
         alias="Vex",
@@ -132,6 +120,25 @@ ALGORITHM_REGISTRY: tuple[AlgorithmEntry, ...] = (
         brokerage_eligible=False,
         user_creatable=True,
         status="active",
+    ),
+    # ---------------------------------------------------------------------------
+    # echo1 — EchoNetworkPairs lead-lag pair strategy
+    # ---------------------------------------------------------------------------
+    # Status "hidden" means it never appears in creation flows or live loops.
+    # To promote: set status="active", live_enabled=True, backfill_enabled=True,
+    # create backfill_echo1.py + bots/echo1.py, add "echo1" to BotType union
+    # in TypeScript, and follow the full checklist in ADDING_NEW_ALGORITHM.md.
+    AlgorithmEntry(
+        slug="echo1",
+        display_name="Echo",
+        alias="Echo",
+        worker_minute_offset=3,
+        fallback_bot_ids=[],
+        backfill_enabled=True,
+        live_enabled=False,
+        brokerage_eligible=False,
+        user_creatable=False,
+        status="hidden",
     ),
     # ---------------------------------------------------------------------------
     # PLACEHOLDER — hidden, not run in production
@@ -152,46 +159,6 @@ ALGORITHM_REGISTRY: tuple[AlgorithmEntry, ...] = (
         brokerage_eligible=False,
         user_creatable=False,
         status="hidden",
-    ),
-    # -------------------------------------------------------------------------
-    # beta1_v2 — Phantom v2 (composite scoring)
-    # Momentum Score + Confirmation Score + Risk Penalty
-    #
-    # Status: "labs" — registered for internal routing and DB isolation only.
-    # live_enabled=False  — no live runner yet (bots/beta1_v2.py not created).
-    #                       Worker will skip this slot entirely.
-    # backfill_enabled=False — no backfill_beta1_v2.py yet.
-    # user_creatable=False  — create/preview routes not wired yet.
-    #
-    # Promotion checklist (do not promote until composite scoring is validated):
-    #   1. Implement bots/beta1_v2.py and beta1_v2_shared.py
-    #   2. Implement backfill_beta1_v2.py
-    #   3. Register live runner in worker.py and backfill dispatcher in
-    #      process_backfill_jobs.py
-    #   4. Wire create-beta1-v2 and preview-beta1-v2 API routes
-    #   5. Flip live_enabled=True, backfill_enabled=True, user_creatable=True,
-    #      status="active"
-    # -------------------------------------------------------------------------
-    AlgorithmEntry(
-        slug="beta1_v2",
-        display_name="Phantom",
-        alias="Phantom",
-        worker_minute_offset=6,
-        fallback_bot_ids=[
-            "imperium_v2",
-            "regina_v2",
-            "bellitus_v2",
-            "rapax_v2",
-            "bellator_v2",
-            "vectura_v2",
-            "vis_v2",
-        ],
-        db_table="beta1_v2",
-        backfill_enabled=True,
-        live_enabled=True,
-        brokerage_eligible=False,
-        user_creatable=False,
-        status="active",
     ),
 )
 
@@ -335,3 +302,4 @@ def get_live_runner(slug: str) -> Callable[[str], dict[str, Any]] | None:
     runner = factory()
     _cached_runners[slug_normalized] = runner
     return runner
+
