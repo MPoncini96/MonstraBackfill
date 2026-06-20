@@ -23,10 +23,18 @@ os.environ.setdefault("MONSTRA_PREVIEW_SERVICE", "1")
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from algorithm_registry import get_algorithm
+from scripts.analyze_echo_pair import (
+    PairAnalysisConfig,
+    PairAnalysisError,
+    TICKER_PATTERN,
+    run_analysis,
+)
 
 logger = logging.getLogger("monstra_backfill")
 
@@ -43,6 +51,27 @@ if _allow_origins:
     )
 
 _bearer = HTTPBearer(auto_error=False)
+
+
+def _error_payload(message: str) -> dict[str, str]:
+    return {"error": message}
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse:
+    message = str(exc.detail) if exc.detail else "Request failed."
+    return JSONResponse(status_code=exc.status_code, content=_error_payload(message))
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(
+    _: Request,
+    exc: RequestValidationError,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=400,
+        content=_error_payload(f"Invalid request body: {exc.errors()[0]['msg']}"),
+    )
 
 
 def verify_preview_auth(
@@ -87,6 +116,106 @@ def _run(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
         return mod.run_preview(preview)
     except ValueError as exc:
         return {"success": False, "error": str(exc)}
+
+
+def _parse_signal_windows(raw: Any) -> list[int]:
+    if not isinstance(raw, list):
+        raise PairAnalysisError(
+            "signalWindows must be an array of positive integers.",
+            "invalid_signal_windows",
+            2,
+        )
+
+    values: list[int] = []
+    for entry in raw:
+        try:
+            parsed = int(entry)
+        except (TypeError, ValueError) as exc:
+            raise PairAnalysisError(
+                "signalWindows must be an array of positive integers.",
+                "invalid_signal_windows",
+                2,
+            ) from exc
+        if parsed <= 0:
+            raise PairAnalysisError(
+                "signalWindows must be an array of positive integers.",
+                "invalid_signal_windows",
+                2,
+            )
+        values.append(parsed)
+
+    unique = sorted(set(values))
+    if not unique:
+        raise PairAnalysisError(
+            "signalWindows must include at least one positive integer.",
+            "invalid_signal_windows",
+            2,
+        )
+    return unique
+
+
+def _build_echo_pair_config(payload: dict[str, Any]) -> PairAnalysisConfig:
+    leader = str(payload.get("leader") or "").strip().upper()
+    follower = str(payload.get("follower") or "").strip().upper()
+    if not leader or not follower:
+        raise PairAnalysisError("Both stock symbols are required.", "invalid_ticker", 2)
+    if not TICKER_PATTERN.match(leader) or not TICKER_PATTERN.match(follower):
+        raise PairAnalysisError(
+            "Stock symbols must use standard ticker characters only.",
+            "invalid_ticker",
+            2,
+        )
+    if leader == follower:
+        raise PairAnalysisError(
+            "Leader and follower must be different stocks for Echo pair analysis.",
+            "identical_tickers",
+            2,
+        )
+
+    return PairAnalysisConfig(
+        leader=leader,
+        follower=follower,
+        signal_windows=_parse_signal_windows(payload.get("signalWindows")),
+    )
+
+
+def _run_echo_preview(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="JSON body must be an object")
+
+    try:
+        mod = importlib.import_module("Preview_backfill_echo1")
+        preview = mod.build_preview_config(payload)
+        return mod.run_preview(preview)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Echo preview crashed")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Echo preview failed: {exc}",
+        ) from exc
+
+
+def _run_echo_pair_analysis(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="JSON body must be an object")
+
+    try:
+        config = _build_echo_pair_config(payload)
+        return run_analysis(config)
+    except PairAnalysisError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Echo pair analysis crashed")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Echo pair analysis failed: {exc}",
+        ) from exc
 
 
 def _run_backfill(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -206,6 +335,22 @@ def post_preview_gamma1(
     _: None = Depends(verify_preview_auth),
 ) -> dict[str, Any]:
     return _run("gamma1", payload)
+
+
+@app.post("/preview/echo1")
+def post_preview_echo1(
+    payload: dict[str, Any],
+    _: None = Depends(verify_preview_auth),
+) -> dict[str, Any]:
+    return _run_echo_preview(payload)
+
+
+@app.post("/preview/echo1-pair-correlation")
+def post_preview_echo1_pair_correlation(
+    payload: dict[str, Any],
+    _: None = Depends(verify_preview_auth),
+) -> dict[str, Any]:
+    return _run_echo_pair_analysis(payload)
 
 
 @app.post("/backfill/alpha1")
