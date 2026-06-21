@@ -6,6 +6,13 @@ Operates in two modes:
   error if a code path accidentally calls it.
 - Backfill mode (DATABASE_URL set): real psycopg2 connection for reading bot configs
   and writing bot_equity rows.  Required by the /backfill/* endpoints.
+
+Startup validation
+------------------
+When this module is imported by a /backfill/* request path (i.e. MONSTRA_PREVIEW_SERVICE
+is NOT set), we validate that DATABASE_URL is present immediately.  This turns a silent
+runtime failure mid-request into an immediate, operator-visible crash at startup instead
+of leaking the missing-env-var message to the API caller.
 """
 
 from __future__ import annotations
@@ -24,6 +31,19 @@ _STRATEGY_TABLE_BY_TYPE = {
     "alpha2":    "trading.alpha2",
     "gamma1":    "trading.gamma1",
 }
+
+# ---------------------------------------------------------------------------
+# Startup validation: fail fast when DATABASE_URL is required but missing.
+# This fires at import time in backfill mode so the service crashes at boot
+# rather than returning an infrastructure-detail error to API callers.
+# ---------------------------------------------------------------------------
+_is_preview_only = bool(os.environ.get("MONSTRA_PREVIEW_SERVICE"))
+
+if not _is_preview_only and not DATABASE_URL:
+    raise EnvironmentError(
+        "DATABASE_URL is required for backfill mode but is not set. "
+        "Set DATABASE_URL in the Render service environment variables and redeploy."
+    )
 
 
 def get_conn() -> Any:

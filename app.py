@@ -53,6 +53,14 @@ if _allow_origins:
 _bearer = HTTPBearer(auto_error=False)
 
 
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Error sanitization – never leak infrastructure details to callers
+# ---------------------------------------------------------------------------
+
+from backfill_error_sanitizer import sanitize_backfill_error
+
 def _error_payload(message: str) -> dict[str, str]:
     return {"error": message}
 
@@ -257,7 +265,8 @@ def _run_backfill(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
         if match is None:
             raise ValueError(f"No active {kind} bot found with bot_id={bot_id!r}")
         result = mod.backfill_single_bot(match)
-    except (ValueError, RuntimeError) as exc:
+    except ValueError as exc:
+        # ValueError is a domain error (e.g. bot not found) – safe to surface.
         logger.error(
             "Backfill failed",
             extra={
@@ -269,8 +278,10 @@ def _run_backfill(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
         )
         return {"success": False, "error": str(exc)}
     except Exception as exc:  # noqa: BLE001
+        # Log the real error (includes DATABASE_URL messages, stack traces, etc.)
+        # then return only a sanitized message to the caller.
         logger.exception(
-            "Backfill unexpected error",
+            "Backfill failed",
             extra={
                 "bot_id": bot_id,
                 "algorithm": kind,
@@ -278,7 +289,7 @@ def _run_backfill(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
                 "error": str(exc),
             },
         )
-        return {"success": False, "error": f"Unexpected backfill error: {exc}"}
+        return {"success": False, "error": sanitize_backfill_error(exc)}
 
     errors = int(result.get("errors") or 0)
     skipped = bool(result.get("skipped"))
