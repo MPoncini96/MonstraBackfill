@@ -124,10 +124,9 @@ ALGORITHM_REGISTRY: tuple[AlgorithmEntry, ...] = (
     # ---------------------------------------------------------------------------
     # echo1 — EchoNetworkPairs lead-lag pair strategy
     # ---------------------------------------------------------------------------
-    # Status "hidden" means it never appears in creation flows or live loops.
-    # To promote: set status="active", live_enabled=True, backfill_enabled=True,
-    # create backfill_echo1.py + bots/echo1.py, add "echo1" to BotType union
-    # in TypeScript, and follow the full checklist in ADDING_NEW_ALGORITHM.md.
+    # Kept in sync with Monstra-Worker/algorithm_registry.py (the source of
+    # truth copied here per ADDING_NEW_ALGORITHM.md §1). Echo is promoted to
+    # live in production; this copy must match or the two services drift.
     AlgorithmEntry(
         slug="echo1",
         display_name="Echo",
@@ -135,10 +134,10 @@ ALGORITHM_REGISTRY: tuple[AlgorithmEntry, ...] = (
         worker_minute_offset=3,
         fallback_bot_ids=[],
         backfill_enabled=True,
-        live_enabled=False,
+        live_enabled=True,
         brokerage_eligible=False,
         user_creatable=False,
-        status="hidden",
+        status="active",
     ),
     # ---------------------------------------------------------------------------
     # PLACEHOLDER — hidden, not run in production
