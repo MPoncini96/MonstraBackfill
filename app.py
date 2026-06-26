@@ -386,3 +386,11 @@ def post_backfill_gamma1(
     _: None = Depends(verify_preview_auth),
 ) -> dict[str, Any]:
     return _run_backfill("gamma1", payload)
+
+
+@app.post("/backfill/echo1")
+def post_backfill_echo1(
+    payload: dict[str, Any],
+    _: None = Depends(verify_preview_auth),
+) -> dict[str, Any]:
+    return _run_backfill("echo1", payload)
