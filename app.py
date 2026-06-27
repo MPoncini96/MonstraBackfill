@@ -9,7 +9,7 @@ MONSTRA_BACKFILL_SERVICE_URL is configured.
 
 Dispatch is driven by algorithm_registry.ALGORITHM_REGISTRY so that adding a new
 algorithm only requires a new AlgorithmEntry there (plus the corresponding
-Preview_backfill_<slug> and backfill_<slug> modules).  No if-chains to update.
+Preview_backfill_<slug> and backfill_<slug> modules). No if-chains to update.
 """
 
 from __future__ import annotations
@@ -17,9 +17,8 @@ from __future__ import annotations
 import importlib
 import logging
 import os
-
-# Skip noisy .env warnings in env_loader (DATABASE_URL is optional for preview mode).
-os.environ.setdefault("MONSTRA_PREVIEW_SERVICE", "1")
+import subprocess
+from functools import lru_cache
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -29,6 +28,8 @@ from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from algorithm_registry import get_algorithm
+from backfill_error_sanitizer import sanitize_backfill_error
+from db import database_status_summary, is_database_configured
 from scripts.analyze_echo_pair import (
     PairAnalysisConfig,
     PairAnalysisError,
@@ -38,7 +39,26 @@ from scripts.analyze_echo_pair import (
 
 logger = logging.getLogger("monstra_backfill")
 
-app = FastAPI(title="MonstraBackfill", version="1.0.0")
+SERVICE_NAME = os.environ.get("RENDER_SERVICE_NAME", "").strip() or os.environ.get(
+    "MONSTRA_SERVICE_NAME",
+    "",
+).strip() or "monstra-backfill"
+
+REQUIRED_BACKFILL_MODULES: dict[str, str] = {
+    "alpha1": "backfill_alpha1",
+    "alpha2": "backfill_alpha2",
+    "gamma1": "backfill_gamma1",
+    "echo1": "backfill_echo1",
+}
+
+REQUIRED_PREVIEW_MODULES: dict[str, str] = {
+    "alpha1": "Preview_backfill_alpha1",
+    "alpha2": "Preview_backfill_alpha2",
+    "gamma1": "Preview_backfill_gamma1",
+    "echo1": "Preview_backfill_echo1",
+}
+
+app = FastAPI(title="MonstraBackfill", version="1.1.0")
 
 _allow_origins = os.environ.get("MONSTRA_PREVIEW_CORS_ORIGINS", "").strip()
 if _allow_origins:
@@ -52,14 +72,6 @@ if _allow_origins:
 
 _bearer = HTTPBearer(auto_error=False)
 
-
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# Error sanitization – never leak infrastructure details to callers
-# ---------------------------------------------------------------------------
-
-from backfill_error_sanitizer import sanitize_backfill_error
 
 def _error_payload(message: str) -> dict[str, str]:
     return {"error": message}
@@ -100,18 +112,156 @@ def verify_preview_auth(
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+@lru_cache(maxsize=1)
+def _detect_git_commit() -> str | None:
+    for key in ("RENDER_GIT_COMMIT", "GIT_COMMIT", "COMMIT_SHA", "RENDER_GIT_SHA"):
+        value = os.environ.get(key, "").strip()
+        if value:
+            return value[:12]
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--short=12", "HEAD"],
+            cwd=os.path.dirname(__file__),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except Exception:
+        return None
+    value = completed.stdout.strip()
+    return value or None
+
+
+def _classify_exception(exc: BaseException) -> str:
+    if isinstance(exc, ModuleNotFoundError):
+        return "missing_module"
+    message = str(exc).lower()
+    if "database_url" in message:
+        return "database_not_configured"
+    if "connection refused" in message or "could not connect" in message:
+        return "database_connection_failed"
+    if "timeout" in message or "timed out" in message:
+        return "timeout"
+    return "unexpected_error"
+
+
+@lru_cache(maxsize=None)
+def _module_status(module_name: str) -> dict[str, Any]:
+    try:
+        importlib.import_module(module_name)
+        return {
+            "module": module_name,
+            "importable": True,
+            "errorCode": None,
+            "error": None,
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "module": module_name,
+            "importable": False,
+            "errorCode": _classify_exception(exc),
+            "error": str(exc),
+        }
+
+
+@lru_cache(maxsize=1)
+def _echo_pair_analysis_status() -> dict[str, Any]:
+    try:
+        run_analysis
+        return {
+            "module": "scripts.analyze_echo_pair",
+            "importable": True,
+            "errorCode": None,
+            "error": None,
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "module": "scripts.analyze_echo_pair",
+            "importable": False,
+            "errorCode": _classify_exception(exc),
+            "error": str(exc),
+        }
+
+
+def _registered_routes(prefix: str) -> list[str]:
+    paths = sorted(
+        {
+            route.path
+            for route in app.routes
+            if getattr(route, "path", "").startswith(prefix)
+        }
+    )
+    return paths
+
+
+def _readiness_snapshot() -> dict[str, Any]:
+    backfill_modules = {
+        slug: _module_status(module_name)
+        for slug, module_name in REQUIRED_BACKFILL_MODULES.items()
+    }
+    preview_modules = {
+        slug: _module_status(module_name)
+        for slug, module_name in REQUIRED_PREVIEW_MODULES.items()
+    }
+    database = database_status_summary()
+    registered_backfill_routes = _registered_routes("/backfill/")
+    required_backfill_routes = [f"/backfill/{slug}" for slug in REQUIRED_BACKFILL_MODULES]
+    missing_backfill_routes = [
+        route for route in required_backfill_routes if route not in registered_backfill_routes
+    ]
+    all_backfill_modules_importable = all(
+        status["importable"] for status in backfill_modules.values()
+    )
+
+    return {
+        "status": "ok",
+        "serviceName": SERVICE_NAME,
+        "version": app.version,
+        "gitCommit": _detect_git_commit(),
+        "database": database,
+        "requiredModules": {
+            "backfill": backfill_modules,
+            "preview": preview_modules,
+            "echoPairAnalysis": _echo_pair_analysis_status(),
+        },
+        "registeredRoutes": {
+            "backfill": registered_backfill_routes,
+            "preview": _registered_routes("/preview/"),
+            "health": ["/health"],
+        },
+        "readiness": {
+            "backfillReady": bool(database["configured"]) and not missing_backfill_routes and all_backfill_modules_importable,
+            "previewReady": all(status["importable"] for status in preview_modules.values())
+            and _echo_pair_analysis_status()["importable"],
+            "missingBackfillRoutes": missing_backfill_routes,
+        },
+        "queueSupport": {
+            "handledByService": False,
+            "note": "creator_publish queue jobs are consumed by monstra-backfill-worker, not this web service.",
+        },
+    }
+
+
+@app.on_event("startup")
+def log_startup_diagnostics() -> None:
+    snapshot = _readiness_snapshot()
+    logger.info(
+        "MonstraBackfill startup diagnostics service=%s commit=%s db_configured=%s backfill_ready=%s preview_ready=%s backfill_routes=%s",
+        snapshot["serviceName"],
+        snapshot["gitCommit"] or "unknown",
+        snapshot["database"]["configured"],
+        snapshot["readiness"]["backfillReady"],
+        snapshot["readiness"]["previewReady"],
+        ",".join(snapshot["registeredRoutes"]["backfill"]),
+    )
+
+
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health() -> dict[str, Any]:
+    return _readiness_snapshot()
 
 
 def _run(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Preview dispatch – registry-driven.
-
-    Adding a new algorithm: add AlgorithmEntry to algorithm_registry.py and
-    create Preview_backfill_<slug>.py with build_preview_config / run_preview.
-    No changes needed here.
-    """
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="JSON body must be an object")
 
@@ -227,12 +377,6 @@ def _run_echo_pair_analysis(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _run_backfill(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Direct backfill dispatch – registry-driven.
-
-    Adding a new algorithm: add AlgorithmEntry to algorithm_registry.py and
-    create backfill_<slug>.py with fetch_active_<slug>_bots / backfill_single_bot.
-    No changes needed here.
-    """
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="JSON body must be an object")
 
@@ -246,6 +390,17 @@ def _run_backfill(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
 
     if not bot_id:
         raise HTTPException(status_code=400, detail="botId is required")
+
+    if not is_database_configured():
+        logger.error(
+            "Backfill request rejected because database is not configured",
+            extra={"bot_id": bot_id, "algorithm": kind, "user_id": user_id},
+        )
+        return {
+            "success": False,
+            "error": "Backfill service is not ready. Database configuration is missing.",
+            "errorCode": "database_not_configured",
+        }
 
     logger.info(
         "Backfill started",
@@ -265,8 +420,23 @@ def _run_backfill(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
         if match is None:
             raise ValueError(f"No active {kind} bot found with bot_id={bot_id!r}")
         result = mod.backfill_single_bot(match)
+    except ModuleNotFoundError as exc:
+        logger.exception(
+            "Backfill module import failed",
+            extra={
+                "bot_id": bot_id,
+                "algorithm": kind,
+                "user_id": user_id,
+                "error": str(exc),
+            },
+        )
+        return {
+            "success": False,
+            "error": f"Backfill service is not ready for {kind}.",
+            "errorCode": "missing_module",
+            "module": exc.name,
+        }
     except ValueError as exc:
-        # ValueError is a domain error (e.g. bot not found) – safe to surface.
         logger.error(
             "Backfill failed",
             extra={
@@ -276,10 +446,8 @@ def _run_backfill(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
                 "error": str(exc),
             },
         )
-        return {"success": False, "error": str(exc)}
+        return {"success": False, "error": str(exc), "errorCode": "no_active_bot_found"}
     except Exception as exc:  # noqa: BLE001
-        # Log the real error (includes DATABASE_URL messages, stack traces, etc.)
-        # then return only a sanitized message to the caller.
         logger.exception(
             "Backfill failed",
             extra={
@@ -289,7 +457,11 @@ def _run_backfill(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
                 "error": str(exc),
             },
         )
-        return {"success": False, "error": sanitize_backfill_error(exc)}
+        return {
+            "success": False,
+            "error": sanitize_backfill_error(exc),
+            "errorCode": _classify_exception(exc),
+        }
 
     errors = int(result.get("errors") or 0)
     skipped = bool(result.get("skipped"))
@@ -310,7 +482,12 @@ def _run_backfill(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
                 "processed_days": processed_days,
             },
         )
-        return {"success": False, "error": msg, "result": result}
+        return {
+            "success": False,
+            "error": msg,
+            "errorCode": "backfill_incomplete",
+            "result": result,
+        }
 
     logger.info(
         "Backfill completed",
@@ -321,7 +498,7 @@ def _run_backfill(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
             "processed_days": processed_days,
         },
     )
-    return {"success": True, "result": result}
+    return {"success": True, "status": "completed", "result": result}
 
 
 @app.post("/preview/alpha1")

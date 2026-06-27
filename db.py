@@ -5,14 +5,11 @@ Operates in two modes:
 - Preview-only (no DATABASE_URL): in-memory previews only; get_conn() raises a clear
   error if a code path accidentally calls it.
 - Backfill mode (DATABASE_URL set): real psycopg2 connection for reading bot configs
-  and writing bot_equity rows.  Required by the /backfill/* endpoints.
+  and writing bot_equity rows. Required by the /backfill/* endpoints.
 
-Startup validation
-------------------
-When this module is imported by a /backfill/* request path (i.e. MONSTRA_PREVIEW_SERVICE
-is NOT set), we validate that DATABASE_URL is present immediately.  This turns a silent
-runtime failure mid-request into an immediate, operator-visible crash at startup instead
-of leaking the missing-env-var message to the API caller.
+This service can host both preview and direct backfill routes in the same
+process. Preview routes must stay healthy even when DATABASE_URL is absent, so
+readiness checks are exposed via helpers instead of import-time crashes.
 """
 
 from __future__ import annotations
@@ -20,54 +17,51 @@ from __future__ import annotations
 import os
 from typing import Any
 
-# trading.bot_equity.source — must match add_bot_equity_source.sql labels
 BOT_EQUITY_SOURCE_BACKFILL = "backfill"
 BOT_EQUITY_SOURCE_LIVE = "live trading"
 
 DATABASE_URL: str = os.environ.get("DATABASE_URL", "")
 
 _STRATEGY_TABLE_BY_TYPE = {
-    "alpha1":    "trading.alpha1",
-    "alpha2":    "trading.alpha2",
-    "gamma1":    "trading.gamma1",
+    "alpha1": "trading.alpha1",
+    "alpha2": "trading.alpha2",
+    "gamma1": "trading.gamma1",
 }
 
-# ---------------------------------------------------------------------------
-# Startup validation: fail fast when DATABASE_URL is required but missing.
-# This fires at import time in backfill mode so the service crashes at boot
-# rather than returning an infrastructure-detail error to API callers.
-# ---------------------------------------------------------------------------
-_is_preview_only = bool(os.environ.get("MONSTRA_PREVIEW_SERVICE"))
 
-if not _is_preview_only and not DATABASE_URL:
-    raise EnvironmentError(
-        "DATABASE_URL is required for backfill mode but is not set. "
-        "Set DATABASE_URL in the Render service environment variables and redeploy."
-    )
+def is_database_configured() -> bool:
+    return bool(DATABASE_URL.strip())
+
+
+def database_status_summary() -> dict[str, str | bool]:
+    configured = is_database_configured()
+    return {
+        "configured": configured,
+        "mode": "configured" if configured else "missing",
+    }
 
 
 def get_conn() -> Any:
     """
     Return a psycopg2 connection when DATABASE_URL is configured.
 
-    Raises RuntimeError (not ImportError) when DATABASE_URL is absent so that
-    the /backfill/* endpoints surface a clear 500 with an actionable message
-    instead of a silent or cryptic failure.
+    Raises RuntimeError when DATABASE_URL is absent so that the /backfill/*
+    endpoints can surface a clear, sanitized readiness failure.
     """
-    if not DATABASE_URL:
+    if not is_database_configured():
         raise RuntimeError(
             "DATABASE_URL is not set on this MonstraBackfill instance. "
             "The /backfill/* endpoints require a live database connection. "
             "Set DATABASE_URL in the Render service environment variables."
         )
-    import psycopg2  # noqa: PLC0415 — imported lazily; not needed for preview-only mode
+    import psycopg2  # noqa: PLC0415
 
     return psycopg2.connect(DATABASE_URL)
 
 
 def get_strategy_origin(bot_id: str, bot_type: str) -> str | None:
     """Return trading.<strategy>.origin for this bot_id + bot_type, or None on failure."""
-    if not DATABASE_URL:
+    if not is_database_configured():
         return None
     base = (bot_id or "").strip()
     if not base:
