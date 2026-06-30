@@ -29,7 +29,7 @@ from typing import Any, Sequence
 
 import numpy as np
 import pandas as pd
-from psycopg2.extras import RealDictCursor, execute_values
+from psycopg2.extras import Json as PgJson, RealDictCursor, execute_values
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -154,23 +154,33 @@ def fetch_previous_equity(bot_id: str, before_date: str) -> float:
 def upsert_backfill_rows(rows: list[BackfillRow]) -> None:
     if not rows:
         return
+    bot_id   = rows[0].bot_id
+    bot_type = rows[0].bot_type
+    min_d    = min(r.d for r in rows)
+    max_d    = max(r.d for r in rows)
+    logger.info(
+        "echo1 backfill upsert: bot_id=%s bot_type=%s rows=%d min_d=%s max_d=%s",
+        bot_id, bot_type, len(rows), min_d, max_d,
+    )
     sql = """
         INSERT INTO trading.bot_equity
             (bot_id, bot_type, d, equity, ret, holdings, origin, source)
         VALUES %s
         ON CONFLICT (bot_id, bot_type, d) DO UPDATE SET
-            equity  = EXCLUDED.equity,
-            ret     = EXCLUDED.ret,
-            holdings = EXCLUDED.holdings,
-            origin  = COALESCE(EXCLUDED.origin, trading.bot_equity.origin),
-            source  = CASE
+            equity     = EXCLUDED.equity,
+            ret        = EXCLUDED.ret,
+            holdings   = EXCLUDED.holdings,
+            origin     = COALESCE(EXCLUDED.origin, trading.bot_equity.origin),
+            updated_at = now(),
+            source     = CASE
                 WHEN LOWER(TRIM(COALESCE(trading.bot_equity.source, ''))) = 'live trading'
                 THEN trading.bot_equity.source
                 ELSE EXCLUDED.source
             END
     """
     values = [
-        (r.bot_id, r.bot_type, r.d, r.equity, r.ret, r.holdings_json, r.origin, r.source)
+        (r.bot_id, r.bot_type, r.d, r.equity, r.ret,
+         PgJson(json.loads(r.holdings_json)), r.origin, r.source)
         for r in rows
     ]
     with get_conn() as conn:
@@ -344,10 +354,8 @@ def backfill_single_bot(bot: Echo1BotRecord) -> dict[str, Any]:
         trade_date = date_ts.date()
 
         if date_idx < warmup_end_idx:
-            rows_to_upsert.append(BackfillRow(
-                bot_id=bot.bot_id, d=trade_date, equity=equity,
-                ret=0.0, holdings_json=json.dumps({}),
-                origin=origin,
+            rows_to_upsert.append(_make_row(
+                bot.bot_id, trade_date, equity, 0.0, {}, "warmup", origin,
             ))
             processed += 1
             continue

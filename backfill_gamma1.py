@@ -184,7 +184,11 @@ def upsert_backfill_rows(rows: list[BackfillRow]) -> None:
             ret = EXCLUDED.ret,
             holdings = EXCLUDED.holdings,
             origin = COALESCE(EXCLUDED.origin, trading.bot_equity.origin),
-            source = EXCLUDED.source
+            source = CASE
+                WHEN LOWER(TRIM(COALESCE(trading.bot_equity.source, ''))) = 'live trading'
+                THEN trading.bot_equity.source
+                ELSE EXCLUDED.source
+            END
     """
     values = [
         (r.bot_id, r.bot_type, r.d, r.equity, r.ret, r.holdings_json, r.origin, r.source)
