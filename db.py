@@ -26,6 +26,7 @@ _STRATEGY_TABLE_BY_TYPE = {
     "alpha1": "trading.alpha1",
     "alpha2": "trading.alpha2",
     "gamma1": "trading.gamma1",
+    "aptet": "trading.aptet",
 }
 
 
@@ -86,3 +87,5 @@ def get_strategy_origin(bot_id: str, bot_type: str) -> str | None:
         return None
     s = str(val).strip()
     return s if s else None
+
+

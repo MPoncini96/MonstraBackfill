@@ -12,20 +12,23 @@ BOT_TYPE_ALPHA1 = "alpha1"
 BOT_TYPE_ALPHA2 = "alpha2"
 BOT_TYPE_GAMMA1 = "gamma1"
 BOT_TYPE_ECHO1 = "echo1"
+BOT_TYPE_APTET = "aptet"
 
 _SUFFIX_ALPHA1 = re.compile(r"_alpha1$", re.IGNORECASE)
 _SUFFIX_ALPHA2 = re.compile(r"_alpha2$", re.IGNORECASE)
 _SUFFIX_GAMMA1 = re.compile(r"_gamma1$", re.IGNORECASE)
 _SUFFIX_ECHO1 = re.compile(r"_echo1$", re.IGNORECASE)
+_SUFFIX_APTET = re.compile(r"_aptet$", re.IGNORECASE)
 
 
 def strip_bot_type_suffix(raw_id: str) -> str:
-    """Remove trailing _alpha1 / _alpha2 / _gamma1 / _echo1 from a stored id."""
+    """Remove trailing _alpha1 / _alpha2 / _gamma1 / _echo1 / _aptet from a stored id."""
     s = raw_id.strip()
     s = _SUFFIX_ALPHA1.sub("", s)
     s = _SUFFIX_ALPHA2.sub("", s)
     s = _SUFFIX_GAMMA1.sub("", s)
     s = _SUFFIX_ECHO1.sub("", s)
+    s = _SUFFIX_APTET.sub("", s)
     return s
 
 
@@ -38,6 +41,8 @@ def infer_bot_type_from_suffix(raw_id: str) -> str:
         return BOT_TYPE_GAMMA1
     if s.endswith("_echo1"):
         return BOT_TYPE_ECHO1
+    if s.endswith("_aptet"):
+        return BOT_TYPE_APTET
     if s.endswith("_alpha1"):
         return BOT_TYPE_ALPHA1
     return BOT_TYPE_ALPHA1

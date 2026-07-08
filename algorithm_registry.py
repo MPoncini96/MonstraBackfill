@@ -1,5 +1,5 @@
 """
-algorithm_registry.py – Central algorithm registry for Monstra Worker.
+algorithm_registry.py â€“ Central algorithm registry for Monstra Worker.
 
 Each entry in ALGORITHM_REGISTRY describes one algorithm family (e.g. "alpha1").
 The registry is the single source of truth for:
@@ -12,8 +12,8 @@ The registry is the single source of truth for:
   - active-bot-id DB query
 
 Adding a new algorithm requires ONE new entry here plus a backfill dispatcher
-registration (see BACKFILL_DISPATCHERS below).  Everything else – the main
-loop, run_all_bots, feed refresh – is driven from this table.
+registration (see BACKFILL_DISPATCHERS below).  Everything else â€“ the main
+loop, run_all_bots, feed refresh â€“ is driven from this table.
 
 Usage:
     from algorithm_registry import ALGORITHM_REGISTRY, BACKFILL_DISPATCHERS
@@ -44,7 +44,7 @@ class AlgorithmEntry:
         Short marketing alias (e.g. "Force", "Vex").  Used in UI copy.
     worker_minute_offset:
         Which minute past the hour the worker fires this algorithm's signal
-        cycle (1 = xx:01 UTC, 2 = xx:02, …).  Must be unique across entries.
+        cycle (1 = xx:01 UTC, 2 = xx:02, â€¦).  Must be unique across entries.
     fallback_bot_ids:
         Bot ids used when the DB is unavailable (official roster only).
     db_table:
@@ -122,11 +122,16 @@ ALGORITHM_REGISTRY: tuple[AlgorithmEntry, ...] = (
         status="active",
     ),
     # ---------------------------------------------------------------------------
-    # echo1 — EchoNetworkPairs lead-lag pair strategy
+    # echo1 â€” EchoNetworkPairs lead-lag pair strategy
     # ---------------------------------------------------------------------------
-    # Kept in sync with Monstra-Worker/algorithm_registry.py (the source of
-    # truth copied here per ADDING_NEW_ALGORITHM.md §1). Echo is promoted to
-    # live in production; this copy must match or the two services drift.
+    # Promoted to live: backfill_echo1.py, bots/echo1.py (run_echo1 live runner),
+    # the "echo1" BotType union entry in TypeScript, and trading.echo1 /
+    # trading.echo1_pairs_cache tables already exist (see ADDING_NEW_ALGORITHM.md).
+    # live_enabled=True is required for get_live_algorithms() to include echo1 â€”
+    # without it, main_loop()/run_all_bots() silently skip Echo even though the
+    # runner is registered via register_live_runner("echo1", ...) in worker.py.
+    # user_creatable stays False: Echo is only deployed as the official "Dux" bot,
+    # not yet exposed in the user bot-creation flow.
     AlgorithmEntry(
         slug="echo1",
         display_name="Echo",
@@ -139,8 +144,20 @@ ALGORITHM_REGISTRY: tuple[AlgorithmEntry, ...] = (
         user_creatable=False,
         status="active",
     ),
+    AlgorithmEntry(
+        slug="aptet",
+        display_name="Aptet",
+        alias="Aptet",
+        worker_minute_offset=5,
+        fallback_bot_ids=[],
+        backfill_enabled=True,
+        live_enabled=True,
+        brokerage_eligible=False,
+        user_creatable=True,
+        status="active",
+    ),
     # ---------------------------------------------------------------------------
-    # PLACEHOLDER — hidden, not run in production
+    # PLACEHOLDER â€” hidden, not run in production
     # ---------------------------------------------------------------------------
     # delta1 is a stub that proves the registry supports future algorithm families.
     # Status "hidden" means it never appears in creation flows or live loops.
@@ -151,7 +168,7 @@ ALGORITHM_REGISTRY: tuple[AlgorithmEntry, ...] = (
         slug="delta1",
         display_name="Apex",
         alias="Apex",
-        worker_minute_offset=5,
+        worker_minute_offset=6,
         fallback_bot_ids=[],
         backfill_enabled=False,  # no backfill_delta1.py yet
         live_enabled=False,      # not run in main_loop until promoted
@@ -198,7 +215,7 @@ def active_slugs() -> list[str]:
 # ---------------------------------------------------------------------------
 # Backfill dispatcher registry
 # ---------------------------------------------------------------------------
-# Each entry maps a slug → a callable(bot_id: str) -> dict that runs the
+# Each entry maps a slug â†’ a callable(bot_id: str) -> dict that runs the
 # backfill for a single bot.  The callables are registered lazily so that
 # importing algorithm_registry does NOT pull in heavy backfill modules.
 
@@ -301,4 +318,7 @@ def get_live_runner(slug: str) -> Callable[[str], dict[str, Any]] | None:
     runner = factory()
     _cached_runners[slug_normalized] = runner
     return runner
+
+
+
 
