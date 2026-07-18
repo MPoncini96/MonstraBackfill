@@ -33,8 +33,8 @@ from bots.echo1 import (
     download_echo1_prices,
 )
 
-START_DATE = "2025-01-01"
-END_DATE = date.today().isoformat()
+DEFAULT_START_DATE = "2025-01-01"
+DEFAULT_END_DATE = date.today().isoformat()
 
 
 @dataclass
@@ -51,6 +51,8 @@ class PreviewConfig:
     use_market_filter: bool
     market_filter_fallback_pct: float
     max_drawdown_pause: float
+    start_date: str
+    end_date: str
 
 
 def _clean_ticker(value: Any, fallback: str = "VOO") -> str:
@@ -105,7 +107,22 @@ def _parse_int_list(raw_values: Any, fallback: list[int]) -> list[int]:
     return unique or list(fallback)
 
 
+def _parse_date_string(value: Any, fallback: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        return fallback
+    text = value.strip()
+    try:
+        return date.fromisoformat(text).isoformat()
+    except ValueError:
+        return fallback
+
+
 def build_preview_config(payload: dict[str, Any]) -> PreviewConfig:
+    start_date = _parse_date_string(payload.get("startDate"), DEFAULT_START_DATE)
+    end_date = _parse_date_string(payload.get("endDate"), DEFAULT_END_DATE)
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+
     return PreviewConfig(
         bot_name=str(payload.get("botName", "")).strip(),
         universe=_normalize_universe(payload.get("tickers")),
@@ -119,6 +136,8 @@ def build_preview_config(payload: dict[str, Any]) -> PreviewConfig:
         use_market_filter=bool(payload.get("useMarketFilter", True)),
         market_filter_fallback_pct=_safe_fraction(payload.get("marketFilterFallbackPct"), 0.5, 0.0, 1.0),
         max_drawdown_pause=_safe_fraction(payload.get("maxDrawdownPause"), 0.2, 0.01, 0.95),
+        start_date=start_date,
+        end_date=end_date,
     )
 
 
@@ -166,7 +185,7 @@ def run_preview(preview: PreviewConfig) -> dict[str, Any]:
     if close_all.empty:
         raise ValueError("Not enough market data was returned for this preview.")
 
-    backfill_dates = close_all.loc[START_DATE:END_DATE].index
+    backfill_dates = close_all.loc[preview.start_date:preview.end_date].index
     if backfill_dates.empty:
         raise ValueError("No trading dates were available in the preview window.")
 
@@ -287,11 +306,13 @@ def run_preview(preview: PreviewConfig) -> dict[str, Any]:
 
     final_equity = rows[-1]["equity"] if rows else 1.0
     final_return_pct = (final_equity - 1.0) * 100.0
+    actual_start_date = rows[0]["d"] if rows else preview.start_date
+    actual_end_date = rows[-1]["d"] if rows else preview.end_date
 
     return {
         "success": True,
-        "startDate": START_DATE,
-        "endDate": END_DATE,
+        "startDate": actual_start_date,
+        "endDate": actual_end_date,
         "initialEquity": 1.0,
         "equity": rows,
         "summary": {

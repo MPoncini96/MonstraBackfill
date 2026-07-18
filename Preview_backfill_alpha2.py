@@ -27,8 +27,8 @@ from bots.alpha2 import (
     parse_rebalance_freq,
 )
 
-START_DATE = "2025-01-01"
-END_DATE = date.today().isoformat()
+DEFAULT_START_DATE = "2025-01-01"
+DEFAULT_END_DATE = date.today().isoformat()
 DEFAULT_TRANSACTION_COST_BPS = 5.0
 DEFAULT_SLIPPAGE_BPS = 5.0
 
@@ -51,6 +51,8 @@ class PreviewConfig:
     benchmark_return_threshold: float
     transaction_cost_bps: float
     slippage_bps: float
+    start_date: str
+    end_date: str
 
 
 def clean_ticker(value: Any, fallback: str | None = None) -> str | None:
@@ -131,7 +133,22 @@ def normalize_weights(raw_weights: Any) -> list[float]:
     return [value / total for value in values]
 
 
+def parse_date_string(value: Any, fallback: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        return fallback
+    text = value.strip()
+    try:
+        return date.fromisoformat(text).isoformat()
+    except ValueError:
+        return fallback
+
+
 def build_preview_config(payload: dict[str, Any]) -> PreviewConfig:
+    start_date = parse_date_string(payload.get("startDate"), DEFAULT_START_DATE)
+    end_date = parse_date_string(payload.get("endDate"), DEFAULT_END_DATE)
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+
     return PreviewConfig(
         bot_name=str(payload.get("botName", "")).strip(),
         groups=normalize_groups(payload.get("groups")),
@@ -149,6 +166,8 @@ def build_preview_config(payload: dict[str, Any]) -> PreviewConfig:
         benchmark_return_threshold=parse_float(payload.get("benchmarkReturnThreshold"), 0.0),
         transaction_cost_bps=parse_float(payload.get("transactionCostBps"), DEFAULT_TRANSACTION_COST_BPS),
         slippage_bps=parse_float(payload.get("slippageBps"), DEFAULT_SLIPPAGE_BPS),
+        start_date=start_date,
+        end_date=end_date,
     )
 
 
@@ -194,7 +213,7 @@ def run_preview(preview: PreviewConfig) -> dict[str, Any]:
 
     config = build_alpha2_config(preview)
     fallback_symbol = config.cash_equivalent or config.benchmark or "VOO"
-    prices = build_universe_price_frame(config, START_DATE, END_DATE)
+    prices = build_universe_price_frame(config, preview.start_date, preview.end_date)
     if prices.empty or len(prices.index) < 2:
         raise ValueError("Not enough market data was returned for this preview.")
 
@@ -276,11 +295,13 @@ def run_preview(preview: PreviewConfig) -> dict[str, Any]:
 
     final_equity = rows[-1]["equity"] if rows else 1.0
     final_return_pct = (final_equity - 1.0) * 100.0
+    actual_start_date = rows[0]["d"] if rows else preview.start_date
+    actual_end_date = rows[-1]["d"] if rows else preview.end_date
 
     return {
         "success": True,
-        "startDate": START_DATE,
-        "endDate": END_DATE,
+        "startDate": actual_start_date,
+        "endDate": actual_end_date,
         "initialEquity": 1.0,
         "equity": rows,
         "summary": {

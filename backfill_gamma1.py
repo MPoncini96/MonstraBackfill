@@ -35,6 +35,7 @@ load_env()
 
 from db import BOT_EQUITY_SOURCE_BACKFILL, get_conn, get_strategy_origin
 from bot_identity import BOT_TYPE_GAMMA1
+from import_market_data import persist_prices_to_market_data, refresh_ticker_performance_safe
 from bots.gamma1 import (
     Gamma1Config,
     build_gamma1_score_table,
@@ -232,11 +233,12 @@ def backfill_single_bot(bot: Gamma1BotConfig) -> dict[str, Any]:
             "skipped": True,
         }
 
-    tickers = list(dict.fromkeys(c.universe + [c.benchmark]))
+    tickers = list(dict.fromkeys(c.universe + [c.benchmark] + ([c.fallback_ticker] if c.fallback_ticker else [])))
     dl_start = price_download_start()
 
     try:
         data = download_gamma1_prices(tickers, dl_start, END_DATE)
+        persist_prices_to_market_data(data, only_new=False, verbose=False)
     except Exception as exc:
         logger.exception("Download failed bot=%s: %s", bot.bot_id, exc)
         return {
@@ -276,11 +278,15 @@ def backfill_single_bot(bot: Gamma1BotConfig) -> dict[str, Any]:
     returns = prices.pct_change().replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
     score_table = build_gamma1_score_table(prices, bm, c.feature_flags)
-    raw_scores = score_table["total"]
+    raw_scores = score_table["total"].copy()
+    raw_scores["_benchmark"] = bm
 
     prev_hold = fetch_previous_holdings(bot.bot_id, START_DATE)
     init_syms = [s for s in prev_hold if s in prices.columns and prev_hold[s] > 1e-12]
-    init_w = pd.Series(0.0, index=prices.columns)
+    tradable_columns = list(prices.columns)
+    if c.fallback_ticker and c.fallback_ticker in data.columns and c.fallback_ticker not in tradable_columns:
+        tradable_columns.append(c.fallback_ticker)
+    init_w = pd.Series(0.0, index=tradable_columns)
     for s, w in prev_hold.items():
         if s in init_w.index and is_finite_number(w):
             init_w.loc[s] = float(w)
@@ -433,3 +439,4 @@ def backfill_gamma1() -> None:
 
 if __name__ == "__main__":
     backfill_gamma1()
+
