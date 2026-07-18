@@ -37,8 +37,8 @@ from bots.alpha1 import (
 )
 from backfill_alpha1 import compute_cost_drag, compute_day_return_and_holdings, compute_turnover
 
-START_DATE = "2025-01-01"
-END_DATE = date.today().isoformat()
+DEFAULT_START_DATE = "2025-01-01"
+DEFAULT_END_DATE = date.today().isoformat()
 DEFAULT_TRANSACTION_COST_BPS = 5.0
 DEFAULT_SLIPPAGE_BPS = 5.0
 
@@ -51,6 +51,8 @@ class PreviewConfig:
     lookback: int
     portfolio_size: int
     weights: list[float]
+    start_date: str
+    end_date: str
 
 
 def clean_ticker(value: Any, fallback: str | None = None) -> str | None:
@@ -104,8 +106,23 @@ def normalize_weights(raw_weights: Any, portfolio_size: int) -> list[float]:
     return normalized[:portfolio_size].tolist()
 
 
+def parse_date_string(value: Any, fallback: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        return fallback
+    text = value.strip()
+    try:
+        return date.fromisoformat(text).isoformat()
+    except ValueError:
+        return fallback
+
+
 def build_preview_config(payload: dict[str, Any]) -> PreviewConfig:
     portfolio_size = parse_int(payload.get("portfolioSize"), 4, minimum=1, maximum=20)
+    start_date = parse_date_string(payload.get("startDate"), DEFAULT_START_DATE)
+    end_date = parse_date_string(payload.get("endDate"), DEFAULT_END_DATE)
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+
     return PreviewConfig(
         bot_name=str(payload.get("botName", "")).strip(),
         tickers=normalize_tickers(payload.get("tickers")),
@@ -113,6 +130,8 @@ def build_preview_config(payload: dict[str, Any]) -> PreviewConfig:
         lookback=parse_int(payload.get("lookback"), 60, minimum=1, maximum=365),
         portfolio_size=portfolio_size,
         weights=normalize_weights(payload.get("weights"), portfolio_size),
+        start_date=start_date,
+        end_date=end_date,
     )
 
 
@@ -145,7 +164,7 @@ def run_preview(preview: PreviewConfig) -> dict[str, Any]:
 
     config = build_alpha1_config(preview)
     effective_top_n = _clamp_top_n(config.top_n, config.rank_weights)
-    prices = _build_price_frame(config, START_DATE, END_DATE)
+    prices = _build_price_frame(config, preview.start_date, preview.end_date)
     if prices.empty or len(prices.index) < 2:
         raise ValueError("Not enough market data was returned for this preview.")
 
@@ -229,10 +248,13 @@ def run_preview(preview: PreviewConfig) -> dict[str, Any]:
     final_equity = rows[-1]["equity"] if rows else 1.0
     final_return_pct = (final_equity - 1.0) * 100.0
 
+    actual_start_date = rows[0]["d"] if rows else preview.start_date
+    actual_end_date = rows[-1]["d"] if rows else preview.end_date
+
     return {
         "success": True,
-        "startDate": START_DATE,
-        "endDate": END_DATE,
+        "startDate": actual_start_date,
+        "endDate": actual_end_date,
         "initialEquity": 1.0,
         "equity": rows,
         "summary": {
