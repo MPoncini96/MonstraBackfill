@@ -44,7 +44,7 @@ from bots.gamma1 import (
     run_weighted_points_backtest,
 )
 
-START_DATE = "2025-01-01"
+START_DATE = "2023-01-01"
 END_DATE = date.today().isoformat()
 
 WARMUP_CALENDAR_DAYS = 450
