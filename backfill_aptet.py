@@ -20,7 +20,7 @@ from env_loader import load_env
 load_env()
 
 from bot_identity import BOT_TYPE_APTET
-from bots.aptet import AptetConfig, download_aptet_prices, resolve_aptet_decision
+from bots.aptet import AptetAdaptationState, AptetConfig, _advance_adaptation_state, download_aptet_prices, resolve_aptet_decision
 from db import BOT_EQUITY_SOURCE_BACKFILL, get_conn, get_strategy_origin
 
 START_DATE = "2025-01-01"
@@ -181,12 +181,18 @@ def backfill_single_bot(bot: AptetConfig) -> dict[str, Any]:
     errors = 0
     processed_days = 0
     risk_off_days = 0
+    adaptation_state: AptetAdaptationState | None = None
     for index, trading_ts in enumerate(prices.index):
         if index == 0:
             continue
         trading_day = trading_ts.date()
         try:
-            selected_symbols, weights, risk_off, risk_reason, metadata = resolve_aptet_decision(prices, bot, end_idx_exclusive=index)
+            selected_symbols, weights, risk_off, risk_reason, metadata = resolve_aptet_decision(
+                prices,
+                bot,
+                end_idx_exclusive=index,
+                adaptation_state=adaptation_state,
+            )
             if risk_off:
                 risk_off_days += 1
             gross_ret, new_holdings = compute_day_return_and_holdings(returns.loc[trading_ts], selected_symbols, weights)
@@ -196,6 +202,7 @@ def backfill_single_bot(bot: AptetConfig) -> dict[str, Any]:
             equity *= (1.0 + net_ret)
             rows_to_upsert.append(BackfillRow(bot_id=bot.bot_id or "", d=trading_day, equity=float(equity), ret=float(net_ret), holdings_json=build_holdings_payload(new_holdings, bot, metadata, risk_off, risk_reason, gross_ret, net_ret, turnover, cost_drag), origin=origin))
             prev_holdings = new_holdings
+            adaptation_state = _advance_adaptation_state(adaptation_state, metadata, net_ret)
             processed_days += 1
         except Exception as exc:
             errors += 1

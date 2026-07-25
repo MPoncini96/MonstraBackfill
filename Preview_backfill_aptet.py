@@ -27,7 +27,7 @@ yf_cache.set_cache_location(YFINANCE_CACHE_DIR)
 yf_cache.set_tz_cache_location(YFINANCE_CACHE_DIR)
 
 from backfill_aptet import compute_cost_drag, compute_day_return_and_holdings, compute_turnover
-from bots.aptet import AptetConfig, download_aptet_prices, resolve_aptet_decision
+from bots.aptet import AptetAdaptationState, AptetConfig, _advance_adaptation_state, download_aptet_prices, resolve_aptet_decision
 
 DEFAULT_START_DATE = "2025-01-01"
 DEFAULT_END_DATE = date.today().isoformat()
@@ -131,10 +131,16 @@ def run_preview(preview: PreviewConfig) -> dict[str, Any]:
     prev_holdings: dict[str, float] = {}
     rows: list[dict[str, Any]] = []
     risk_off_days = 0
+    adaptation_state: AptetAdaptationState | None = None
     for index, trading_ts in enumerate(prices.index):
         if index == 0:
             continue
-        selected_symbols, weights, risk_off, risk_reason, metadata = resolve_aptet_decision(prices, config, end_idx_exclusive=index)
+        selected_symbols, weights, risk_off, risk_reason, metadata = resolve_aptet_decision(
+            prices,
+            config,
+            end_idx_exclusive=index,
+            adaptation_state=adaptation_state,
+        )
         if risk_off:
             risk_off_days += 1
         gross_ret, current_holdings = compute_day_return_and_holdings(returns.loc[trading_ts], selected_symbols, weights)
@@ -150,6 +156,7 @@ def run_preview(preview: PreviewConfig) -> dict[str, Any]:
             "meta": {"risk_off": bool(risk_off), "risk_reason": risk_reason, "turnover": float(turnover), "cost_drag": float(cost_drag), **metadata},
         })
         prev_holdings = current_holdings.copy()
+        adaptation_state = _advance_adaptation_state(adaptation_state, metadata, net_ret)
     final_equity = rows[-1]["equity"] if rows else 1.0
     actual_start_date = rows[0]["d"] if rows else preview.start_date
     actual_end_date = rows[-1]["d"] if rows else preview.end_date

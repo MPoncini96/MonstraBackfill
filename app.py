@@ -47,7 +47,6 @@ SERVICE_NAME = os.environ.get("RENDER_SERVICE_NAME", "").strip() or os.environ.g
 REQUIRED_BACKFILL_MODULES: dict[str, str] = {
     "alpha1": "backfill_alpha1",
     "alpha2": "backfill_alpha2",
-    "gamma1": "backfill_gamma1",
     "echo1": "backfill_echo1",
     "aptet": "backfill_aptet",
 }
@@ -55,7 +54,6 @@ REQUIRED_BACKFILL_MODULES: dict[str, str] = {
 REQUIRED_PREVIEW_MODULES: dict[str, str] = {
     "alpha1": "Preview_backfill_alpha1",
     "alpha2": "Preview_backfill_alpha2",
-    "gamma1": "Preview_backfill_gamma1",
     "echo1": "Preview_backfill_echo1",
     "aptet": "Preview_backfill_aptet",
 }
@@ -267,8 +265,11 @@ def _run(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="JSON body must be an object")
 
-    if get_algorithm(kind) is None:
+    entry = get_algorithm(kind)
+    if entry is None:
         raise HTTPException(status_code=400, detail=f"Unknown preview kind: {kind!r}")
+    if kind not in REQUIRED_PREVIEW_MODULES or entry.status != "active":
+        raise HTTPException(status_code=404, detail=f"Preview is not available for {kind!r}")
 
     try:
         mod = importlib.import_module(f"Preview_backfill_{kind}")
@@ -385,6 +386,8 @@ def _run_backfill(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
     entry = get_algorithm(kind)
     if entry is None:
         raise HTTPException(status_code=400, detail=f"Unknown backfill kind: {kind!r}")
+    if kind not in REQUIRED_BACKFILL_MODULES or entry.status != "active" or not entry.backfill_enabled:
+        raise HTTPException(status_code=404, detail=f"Backfill is not available for {kind!r}")
 
     bot_id = str(payload.get("botId") or "").strip()
     user_id = str(payload.get("userId") or "").strip()
@@ -519,13 +522,6 @@ def post_preview_alpha2(
     return _run("alpha2", payload)
 
 
-@app.post("/preview/gamma1")
-def post_preview_gamma1(
-    payload: dict[str, Any],
-    _: None = Depends(verify_preview_auth),
-) -> dict[str, Any]:
-    return _run("gamma1", payload)
-
 
 @app.post("/preview/echo1")
 def post_preview_echo1(
@@ -566,13 +562,6 @@ def post_backfill_alpha2(
 ) -> dict[str, Any]:
     return _run_backfill("alpha2", payload)
 
-
-@app.post("/backfill/gamma1")
-def post_backfill_gamma1(
-    payload: dict[str, Any],
-    _: None = Depends(verify_preview_auth),
-) -> dict[str, Any]:
-    return _run_backfill("gamma1", payload)
 
 
 @app.post("/backfill/aptet")

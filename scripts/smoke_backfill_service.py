@@ -20,7 +20,6 @@ def build_session() -> requests.Session:
 DEFAULT_PATHS = [
     "/backfill/alpha1",
     "/backfill/alpha2",
-    "/backfill/gamma1",
     "/backfill/echo1",
 ]
 

@@ -115,11 +115,11 @@ ALGORITHM_REGISTRY: tuple[AlgorithmEntry, ...] = (
         alias="Vex",
         worker_minute_offset=4,
         fallback_bot_ids=[],
-        backfill_enabled=True,
-        live_enabled=True,
+        backfill_enabled=False,
+        live_enabled=False,
         brokerage_eligible=False,
-        user_creatable=True,
-        status="active",
+        user_creatable=False,
+        status="deprecated",
     ),
     # ---------------------------------------------------------------------------
     # echo1 â€” EchoNetworkPairs lead-lag pair strategy
