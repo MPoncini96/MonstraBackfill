@@ -49,6 +49,7 @@ REQUIRED_BACKFILL_MODULES: dict[str, str] = {
     "alpha2": "backfill_alpha2",
     "echo1": "backfill_echo1",
     "aptet": "backfill_aptet",
+    "draco": "backfill_draco",
 }
 
 REQUIRED_PREVIEW_MODULES: dict[str, str] = {
@@ -56,6 +57,7 @@ REQUIRED_PREVIEW_MODULES: dict[str, str] = {
     "alpha2": "Preview_backfill_alpha2",
     "echo1": "Preview_backfill_echo1",
     "aptet": "Preview_backfill_aptet",
+    "draco": "Preview_backfill_draco",
 }
 
 app = FastAPI(title="MonstraBackfill", version="1.1.0")
@@ -539,6 +541,14 @@ def post_preview_aptet(
     return _run("aptet", payload)
 
 
+@app.post("/preview/draco")
+def post_preview_draco(
+    payload: dict[str, Any],
+    _: None = Depends(verify_preview_auth),
+) -> dict[str, Any]:
+    return _run("draco", payload)
+
+
 @app.post("/preview/echo1-pair-correlation")
 def post_preview_echo1_pair_correlation(
     payload: dict[str, Any],
@@ -578,5 +588,13 @@ def post_backfill_echo1(
     _: None = Depends(verify_preview_auth),
 ) -> dict[str, Any]:
     return _run_backfill("echo1", payload)
+
+
+@app.post("/backfill/draco")
+def post_backfill_draco(
+    payload: dict[str, Any],
+    _: None = Depends(verify_preview_auth),
+) -> dict[str, Any]:
+    return _run_backfill("draco", payload)
 
 

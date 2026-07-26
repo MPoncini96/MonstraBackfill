@@ -176,6 +176,28 @@ ALGORITHM_REGISTRY: tuple[AlgorithmEntry, ...] = (
         user_creatable=False,
         status="hidden",
     ),
+    # ---------------------------------------------------------------------------
+    # draco — multi-timeframe log-linear regression mean-reversion / trend-quality
+    # ---------------------------------------------------------------------------
+    # First official bot: Vectura (a new "draco" variation of the existing
+    # official "vectura" identity, alongside its existing alpha1/Force variation
+    # - see officialBotRegistry.ts). Official-only for v1 (user_creatable=False),
+    # mirroring the echo1 precedent for a complex, stateful algorithm family.
+    # Locked regression targets and portfolio/risk state persist in
+    # trading.draco_state (see bots/draco.py + migrations/create_draco_tables.sql),
+    # never held only in worker process memory.
+    AlgorithmEntry(
+        slug="draco",
+        display_name="Draco",
+        alias="Draco",
+        worker_minute_offset=7,
+        fallback_bot_ids=["vectura"],
+        backfill_enabled=True,
+        live_enabled=True,
+        brokerage_eligible=False,
+        user_creatable=False,
+        status="active",
+    ),
 )
 
 # ---------------------------------------------------------------------------
