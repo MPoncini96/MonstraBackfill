@@ -303,6 +303,7 @@ def _download_price_frame(symbols: list[str], start_date: str, end_date: str, *,
             progress=False,
             group_by="column",
             threads=threads,
+            timeout=20,
         )
     except Exception as exc:
         logger.warning("Aptet price download failed symbols=%s threads=%s error=%s", symbols, threads, exc)
