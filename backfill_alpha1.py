@@ -842,7 +842,7 @@ def backfill_single_bot(bot: Alpha1BotConfig) -> dict[str, Any]:
         if i == 0:
             continue
 
-        trading_day = trading_ts.date()
+        trading_day = trading_ts.date() if hasattr(trading_ts, "date") else trading_ts
 
         try:
             ranked_trailing = get_trailing_returns(
