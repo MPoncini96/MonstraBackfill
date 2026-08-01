@@ -5,10 +5,10 @@ HTTP service for Monstra preview requests and direct creator-bot backfills. Depl
 ## Endpoints
 
 - `GET /health` - readiness and route/module diagnostics
-- `POST /preview/alpha1` | `alpha2` | `gamma1` | `aptet` - same JSON body as the Next.js `/api/bots/preview-*` routes
+- `POST /preview/alpha1` | `alpha2` | `aptet` - same JSON body as the Next.js `/api/bots/preview-*` routes
 - `POST /preview/echo1`
 - `POST /preview/echo1-pair-correlation`
-- `POST /backfill/alpha1` | `alpha2` | `gamma1` | `aptet` | `echo1`
+- `POST /backfill/alpha1` | `alpha2` | `aptet` | `echo1`
 
 Optional auth: set `MONSTRA_PREVIEW_SECRET` and send `Authorization: Bearer <secret>`.
 

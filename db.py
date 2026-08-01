@@ -25,7 +25,6 @@ DATABASE_URL: str = os.environ.get("DATABASE_URL", "")
 _STRATEGY_TABLE_BY_TYPE = {
     "alpha1": "trading.alpha1",
     "alpha2": "trading.alpha2",
-    "gamma1": "trading.gamma1",
     "aptet": "trading.aptet",
 }
 

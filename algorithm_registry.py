@@ -41,7 +41,7 @@ class AlgorithmEntry:
     display_name:
         Human-readable algorithm name shown in logs and error messages.
     alias:
-        Short marketing alias (e.g. "Force", "Vex").  Used in UI copy.
+        Short marketing alias (e.g. "Force", "Echo").  Used in UI copy.
     worker_minute_offset:
         Which minute past the hour the worker fires this algorithm's signal
         cycle (1 = xx:01 UTC, 2 = xx:02, â€¦).  Must be unique across entries.
@@ -108,18 +108,6 @@ ALGORITHM_REGISTRY: tuple[AlgorithmEntry, ...] = (
         brokerage_eligible=False,
         user_creatable=True,
         status="active",
-    ),
-    AlgorithmEntry(
-        slug="gamma1",
-        display_name="Vex",
-        alias="Vex",
-        worker_minute_offset=4,
-        fallback_bot_ids=[],
-        backfill_enabled=False,
-        live_enabled=False,
-        brokerage_eligible=False,
-        user_creatable=False,
-        status="deprecated",
     ),
     # ---------------------------------------------------------------------------
     # echo1 â€” EchoNetworkPairs lead-lag pair strategy
