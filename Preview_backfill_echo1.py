@@ -41,6 +41,7 @@ DEFAULT_END_DATE = date.today().isoformat()
 class PreviewConfig:
     bot_name: str
     universe: list[str]
+    managed_pairs: list[dict[str, Any]]
     fallback_ticker: str
     portfolio_size: int
     target_gross_exposure: float
@@ -107,6 +108,26 @@ def _parse_int_list(raw_values: Any, fallback: list[int]) -> list[int]:
     return unique or list(fallback)
 
 
+def _normalize_managed_pairs(raw_pairs: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_pairs, list):
+        return []
+    pairs: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for raw_pair in raw_pairs:
+        if not isinstance(raw_pair, dict):
+            continue
+        leader = _clean_ticker(raw_pair.get("leader"), "")
+        follower = _clean_ticker(raw_pair.get("follower"), "")
+        if not leader or not follower:
+            continue
+        key = (leader, follower)
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append({**raw_pair, "leader": leader, "follower": follower})
+    return pairs
+
+
 def _parse_date_string(value: Any, fallback: str) -> str:
     if not isinstance(value, str) or not value.strip():
         return fallback
@@ -123,9 +144,15 @@ def build_preview_config(payload: dict[str, Any]) -> PreviewConfig:
     if start_date > end_date:
         start_date, end_date = end_date, start_date
 
+    managed_pairs = _normalize_managed_pairs(payload.get("managedPairs"))
+    resolved_universe = _normalize_universe(payload.get("tickers"))
+    if managed_pairs:
+        resolved_universe = list(dict.fromkeys([ticker for pair in managed_pairs for ticker in (pair["leader"], pair["follower"])]))
+
     return PreviewConfig(
         bot_name=str(payload.get("botName", "")).strip(),
-        universe=_normalize_universe(payload.get("tickers")),
+        universe=resolved_universe,
+        managed_pairs=managed_pairs,
         fallback_ticker=_clean_ticker(payload.get("fallbackTicker"), "VOO"),
         portfolio_size=_safe_int(payload.get("portfolioSize"), 4),
         target_gross_exposure=_safe_fraction(payload.get("targetGrossExposure"), 0.95, 0.1, 1.0),
@@ -197,7 +224,7 @@ def run_preview(preview: PreviewConfig) -> dict[str, Any]:
     holdings: dict[str, float] = {}
     drawdown_pause_active = False
     drawdown_pause_idx: int | None = None
-    discovered_pairs: list[dict[str, Any]] = []
+    discovered_pairs: list[dict[str, Any]] = list(preview.managed_pairs)
     last_pair_refresh_month: int | None = None
     rows: list[dict[str, Any]] = []
     fallback_days = 0
@@ -256,7 +283,9 @@ def run_preview(preview: PreviewConfig) -> dict[str, Any]:
                         regime = "market_filter"
 
         if regime == "active":
-            if last_pair_refresh_month is None or date_ts.month != last_pair_refresh_month:
+            if preview.managed_pairs:
+                discovered_pairs = list(preview.managed_pairs)
+            elif last_pair_refresh_month is None or date_ts.month != last_pair_refresh_month:
                 close_window = close_all.iloc[max(0, date_idx - cfg.discovery_lookback - 30): date_idx + 1]
                 discovered_pairs = discover_pairs(close_window, cfg)
                 if len(discovered_pairs) < 10:
