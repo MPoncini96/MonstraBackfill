@@ -37,6 +37,7 @@ from bots.aptet import (
     _bounded_candidate_top_ns,
     _rolling_compounded_return,
     download_aptet_prices,
+    resolve_holdings_bounds,
 )
 from backfill_aptet import compute_cost_drag, compute_turnover
 
@@ -100,8 +101,9 @@ def _parse_date_string(value: Any, fallback: str) -> str:
 def build_preview_config(payload: dict[str, Any]) -> PreviewConfig:
     fallback_ticker = _clean_ticker(payload.get("fallbackTicker"), "VOO") or "VOO"
     universe = _normalize_universe(payload.get("universe"), fallback_ticker)
-    max_holdings = _parse_int(payload.get("maxHoldings"), 8, minimum=1, maximum=max(1, len(universe) or 1))
-    min_holdings = _parse_int(payload.get("minHoldings"), 2, minimum=1, maximum=max_holdings)
+    requested_max = _parse_int(payload.get("maxHoldings"), 8, minimum=1, maximum=max(1, len(universe) or 1))
+    requested_min = _parse_int(payload.get("minHoldings"), 2, minimum=1, maximum=requested_max)
+    min_holdings, max_holdings = resolve_holdings_bounds(len(universe), requested_min, requested_max)
     adaptation_speed = str(payload.get("adaptationSpeed") or "balanced").strip().lower() or "balanced"
     if adaptation_speed not in {"conservative", "balanced", "aggressive"}:
         adaptation_speed = "balanced"
@@ -123,6 +125,15 @@ def build_preview_config(payload: dict[str, Any]) -> PreviewConfig:
 
 
 # ─── Vectorized pre-computation ───────────────────────────────────────────────
+# NOTE: this module re-implements ranking/selection with raw numpy for speed
+# instead of calling bots.aptet's _choose_holdings_for_day / resolve_aptet_decision
+# directly, so the return+Sharpe blend, correlation-cap diversification, and
+# incumbency-margin turnover buffer added there are NOT reflected here yet --
+# holdings selection below is still pure top-N-by-trailing-return. Only the
+# ABSOLUTE_MIN_HOLDINGS floor (via resolve_holdings_bounds in
+# build_preview_config) has been ported. Porting the rest means rewriting
+# _fast_simulate_combo/_fast_optimize_params/run_preview's selection loop to
+# match bots.aptet's logic.
 
 def _build_trailing_matrices(prices_np: np.ndarray, lookbacks: list[int]) -> dict[int, np.ndarray]:
     """
@@ -402,7 +413,7 @@ def run_preview(preview: PreviewConfig) -> dict[str, Any]:
             selected_lookback = prior_lookback if prior_lookback is not None else DEFAULT_LOOKBACK_DAYS
             selected_top_n    = (
                 prior_top_n if prior_top_n is not None
-                else min(DEFAULT_MIN_HOLDINGS, max(1, len(config.universe)))
+                else min(config.min_holdings, max(1, len(config.universe)))
             )
         parameter_changed = prior_lookback != selected_lookback or prior_top_n != selected_top_n
 

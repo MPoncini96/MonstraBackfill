@@ -20,7 +20,7 @@ from env_loader import load_env
 load_env()
 
 from bot_identity import BOT_TYPE_APTET
-from bots.aptet import AptetAdaptationState, AptetConfig, _advance_adaptation_state, download_aptet_prices, resolve_aptet_decision
+from bots.aptet import AptetAdaptationState, AptetConfig, _advance_adaptation_state, download_aptet_prices, resolve_aptet_decision, resolve_holdings_bounds
 from db import BOT_EQUITY_SOURCE_BACKFILL, get_conn, get_strategy_origin
 
 START_DATE = "2025-01-01"
@@ -61,21 +61,25 @@ def fetch_active_aptet_bots() -> list[AptetConfig]:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("SELECT * FROM trading.aptet WHERE is_active = TRUE ORDER BY bot_id")
             rows = cur.fetchall()
-    return [
-        AptetConfig(
-            universe=list(row.get("universe") or []),
+    configs = []
+    for row in rows:
+        universe = list(row.get("universe") or [])
+        min_holdings, max_holdings = resolve_holdings_bounds(
+            len(universe), int(row.get("min_holdings") or 2), int(row.get("max_holdings") or 8),
+        )
+        configs.append(AptetConfig(
+            universe=universe,
             fallback_ticker=str(row.get("fallback_ticker") or "VOO").strip().upper(),
             benchmark_ticker=str((row.get("benchmark_ticker") or row.get("fallback_ticker") or "VOO")).strip().upper(),
-            min_holdings=int(row.get("min_holdings") or 2),
-            max_holdings=int(row.get("max_holdings") or 8),
+            min_holdings=min_holdings,
+            max_holdings=max_holdings,
             adaptation_speed=str(row.get("adaptation_speed") or "balanced").strip().lower(),
             risk_off_enabled=bool(True if row.get("risk_off_enabled") is None else row.get("risk_off_enabled")),
             history_period=str(row.get("history_period")).strip() if row.get("history_period") else None,
             interval=str(row.get("interval") or "1d").strip() or "1d",
             bot_id=str(row.get("bot_id") or "").strip(),
-        )
-        for row in rows
-    ]
+        ))
+    return configs
 
 
 def fetch_previous_equity(bot_id: str, start_date: str, bot_type: str = BOT_TYPE_APTET) -> float:
@@ -192,6 +196,7 @@ def backfill_single_bot(bot: AptetConfig) -> dict[str, Any]:
                 bot,
                 end_idx_exclusive=index,
                 adaptation_state=adaptation_state,
+                current_holdings=list(prev_holdings.keys()),
             )
             if risk_off:
                 risk_off_days += 1

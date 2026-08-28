@@ -25,6 +25,9 @@ DEFAULT_MAX_HOLDINGS = 8
 DEFAULT_ADAPTATION_SPEED = "balanced"
 PARAMETER_REVIEW_DAYS = 5
 MIN_OPTIMIZATION_SAMPLES = 20
+# Never let a bot concentrate into fewer names than this, regardless of what
+# a bot's own min_holdings config (or the adaptive-universe size) requests.
+ABSOLUTE_MIN_HOLDINGS = 3
 TOP_RETURN_THRESHOLD = 0.0
 BENCHMARK_RETURN_THRESHOLD = 0.0
 REQUIRE_FULL_LOOKBACK_WINDOW = True
@@ -41,12 +44,36 @@ class AdaptationProfile:
     candidate_lookbacks: list[int]
     optimization_train_days: int
     optimization_check_days: int
+    # Stock-selection weighting: how much of the ranking score comes from
+    # raw trailing return vs. a per-stock Sharpe-like (return/vol) stat.
+    return_weight: float = 0.6
+    sharpe_weight: float = 0.4
+    # Greedy diversification: a candidate is skipped in favor of the next
+    # best one if it's more correlated than this with an already-picked
+    # holding (over the same lookback window used to rank it).
+    max_pairwise_correlation: float = 0.85
+    # Turnover buffer: a currently-held name keeps this much bonus (in the
+    # same standardized score units) over challengers, so a borderline
+    # ranking difference doesn't cause a swap. Higher = stickier.
+    incumbency_margin: float = 0.15
 
 
 ADAPTATION_PROFILES: dict[str, AdaptationProfile] = {
-    "conservative": AdaptationProfile([20, 25, 30], 63, 15),
-    "balanced": AdaptationProfile([10, 15, 20, 25, 30], 42, 10),
-    "aggressive": AdaptationProfile([5, 10, 15, 20], 30, 5),
+    "conservative": AdaptationProfile(
+        [20, 25, 30], 63, 15,
+        return_weight=0.45, sharpe_weight=0.55,
+        max_pairwise_correlation=0.75, incumbency_margin=0.25,
+    ),
+    "balanced": AdaptationProfile(
+        [10, 15, 20, 25, 30], 42, 10,
+        return_weight=0.6, sharpe_weight=0.4,
+        max_pairwise_correlation=0.85, incumbency_margin=0.15,
+    ),
+    "aggressive": AdaptationProfile(
+        [5, 10, 15, 20], 30, 5,
+        return_weight=0.75, sharpe_weight=0.25,
+        max_pairwise_correlation=0.90, incumbency_margin=0.08,
+    ),
 }
 
 
@@ -181,12 +208,36 @@ def _advance_adaptation_state(
     )
 
 
+def resolve_holdings_bounds(universe_len: int, requested_min: int, requested_max: int) -> tuple[int, int]:
+    """Clamp (min_holdings, max_holdings) to [ABSOLUTE_MIN_HOLDINGS, 10] given
+    what the universe can actually support. Every path that turns a DB row /
+    API request into an AptetConfig must route through this -- it's the one
+    place the "never fewer than ABSOLUTE_MIN_HOLDINGS names" rule lives. A
+    universe smaller than the floor degrades to "as many as exist" rather
+    than raising, since there's nothing else to hold."""
+    universe_cap = min(universe_len, 10)
+    if not universe_cap:
+        return requested_min, requested_max
+    holdings_floor = min(ABSOLUTE_MIN_HOLDINGS, universe_cap)
+    if universe_cap < ABSOLUTE_MIN_HOLDINGS:
+        logger.warning(
+            "Aptet universe too small to reach ABSOLUTE_MIN_HOLDINGS=%d (has %d); using %d",
+            ABSOLUTE_MIN_HOLDINGS, universe_cap, holdings_floor,
+        )
+    max_holdings = min(universe_cap, max(requested_max, holdings_floor))
+    min_holdings = min(max_holdings, max(requested_min, holdings_floor))
+    return min_holdings, max_holdings
+
+
 def aptet_config_from_db_dict(data: dict[str, Any] | None, *, bot_id: str | None = None) -> AptetConfig:
     raw = data or {}
     fallback_ticker = _clean_ticker(raw.get("fallback_ticker"), DEFAULT_FALLBACK_TICKER) or DEFAULT_FALLBACK_TICKER
     universe = _normalize_universe(raw.get("universe"), fallback_ticker) or list(DEFAULT_UNIVERSE)
-    max_holdings = min(len(universe), _safe_int(raw.get("max_holdings"), DEFAULT_MAX_HOLDINGS))
-    min_holdings = min(max_holdings, _safe_int(raw.get("min_holdings"), DEFAULT_MIN_HOLDINGS))
+    min_holdings, max_holdings = resolve_holdings_bounds(
+        len(universe),
+        _safe_int(raw.get("min_holdings"), DEFAULT_MIN_HOLDINGS),
+        _safe_int(raw.get("max_holdings"), DEFAULT_MAX_HOLDINGS),
+    )
     adaptation_speed = str(raw.get("adaptation_speed") or DEFAULT_ADAPTATION_SPEED).strip().lower() or DEFAULT_ADAPTATION_SPEED
     if adaptation_speed not in ADAPTATION_PROFILES:
         adaptation_speed = DEFAULT_ADAPTATION_SPEED
@@ -495,20 +546,114 @@ def _evaluate_risk_off(config: AptetConfig, ranked_trailing: pd.Series, benchmar
     return (True, "; ".join(reasons)) if reasons else (False, "risk_on")
 
 
-def _equal_weight_holdings(ranked_trailing: pd.Series, top_n: int) -> tuple[list[str], np.ndarray]:
+def _window_daily_returns(prices: pd.DataFrame, end_idx_exclusive: int, lookback_days: int, symbols: list[str]) -> pd.DataFrame:
+    if not symbols:
+        return pd.DataFrame()
+    start_idx = max(0, end_idx_exclusive - lookback_days)
+    window = prices.iloc[start_idx:end_idx_exclusive]
+    window = window.loc[:, [symbol for symbol in symbols if symbol in window.columns]]
+    if window.shape[0] < 2 or window.empty:
+        return pd.DataFrame()
+    return window.pct_change().iloc[1:]
+
+
+def _zscore(series: pd.Series) -> pd.Series:
+    std = float(series.std(ddof=0))
+    if not std or not np.isfinite(std):
+        return pd.Series(0.0, index=series.index)
+    return (series - series.mean()) / std
+
+
+def _score_candidates(ranked_trailing: pd.Series, daily_returns: pd.DataFrame, profile: AdaptationProfile) -> pd.Series:
+    """Blend trailing performance with a per-stock Sharpe-like stat so a hot
+    but noisy name doesn't automatically beat a steadier one."""
+    if ranked_trailing.empty:
+        return ranked_trailing
+    if daily_returns.empty:
+        sharpe_like = pd.Series(0.0, index=ranked_trailing.index)
+    else:
+        mean = daily_returns.mean(skipna=True)
+        vol = daily_returns.std(skipna=True)
+        sharpe_like = (mean / vol.replace(0.0, np.nan)) * np.sqrt(252)
+        sharpe_like = sharpe_like.reindex(ranked_trailing.index).fillna(0.0)
+    return profile.return_weight * _zscore(ranked_trailing) + profile.sharpe_weight * _zscore(sharpe_like)
+
+
+def _select_diversified_holdings(scored: pd.Series, daily_returns: pd.DataFrame, top_n: int, max_pairwise_correlation: float) -> list[str]:
+    """Greedily take the best-scored names, skipping a candidate that's too
+    correlated with one already picked. Never returns fewer than
+    min(top_n, len(scored)) -- diversification is a preference, not a rule
+    that's allowed to shrink the portfolio below what was asked for, so
+    over-correlated candidates get backfilled in score order if needed."""
+    ordered = scored.sort_values(ascending=False).index.tolist()
+    selected: list[str] = []
+    skipped: list[str] = []
+    for symbol in ordered:
+        if len(selected) >= top_n:
+            break
+        if symbol not in daily_returns.columns or daily_returns[symbol].dropna().shape[0] < 5:
+            selected.append(symbol)
+            continue
+        too_correlated = False
+        for held in selected:
+            if held not in daily_returns.columns:
+                continue
+            pair = daily_returns[[symbol, held]].dropna()
+            if len(pair) < 5:
+                continue
+            corr = pair[symbol].corr(pair[held])
+            if pd.notna(corr) and float(corr) > max_pairwise_correlation:
+                too_correlated = True
+                break
+        (skipped if too_correlated else selected).append(symbol)
+    for symbol in skipped:
+        if len(selected) >= top_n:
+            break
+        selected.append(symbol)
+    return selected
+
+
+def _rank_and_select_holdings(
+    prices: pd.DataFrame,
+    end_idx_exclusive: int,
+    lookback_days: int,
+    ranked_trailing: pd.Series,
+    top_n: int,
+    profile: AdaptationProfile,
+    current_holdings: list[str] | None,
+) -> tuple[list[str], np.ndarray]:
     if ranked_trailing.empty:
         return [], np.array([], dtype=float)
-    selected = ranked_trailing.sort_values(ascending=False).head(top_n).index.tolist()
+    daily_returns = _window_daily_returns(prices, end_idx_exclusive, lookback_days, list(ranked_trailing.index))
+    scored = _score_candidates(ranked_trailing, daily_returns, profile)
+    held = set(current_holdings or []) & set(scored.index)
+    if held:
+        scored = scored.copy()
+        scored.loc[list(held)] = scored.loc[list(held)] + profile.incumbency_margin
+    selected = _select_diversified_holdings(scored, daily_returns, top_n, profile.max_pairwise_correlation)
     if not selected:
         return [], np.array([], dtype=float)
     return selected, np.ones(len(selected), dtype=float) / float(len(selected))
 
 
-def _choose_holdings_for_day(config: AptetConfig, ranked_trailing: pd.Series, benchmark_trailing: pd.Series, top_n: int) -> tuple[list[str], np.ndarray, bool, str]:
+def _choose_holdings_for_day(
+    config: AptetConfig,
+    ranked_trailing: pd.Series,
+    benchmark_trailing: pd.Series,
+    top_n: int,
+    *,
+    prices: pd.DataFrame,
+    end_idx_exclusive: int,
+    lookback_days: int,
+    profile: AdaptationProfile,
+    current_holdings: list[str] | None = None,
+) -> tuple[list[str], np.ndarray, bool, str]:
     risk_off, reason = _evaluate_risk_off(config, ranked_trailing, benchmark_trailing)
     if risk_off:
         return [config.fallback_ticker], np.array([1.0], dtype=float), True, reason
-    selected, weights = _equal_weight_holdings(ranked_trailing, top_n)
+    selected, weights = _rank_and_select_holdings(
+        prices, end_idx_exclusive, lookback_days, ranked_trailing, top_n, profile, current_holdings,
+    )
     if not selected and USE_FALLBACK_TICKER:
         return [config.fallback_ticker], np.array([1.0], dtype=float), True, "no_selected_symbols"
     return selected, weights, False, reason
@@ -532,10 +677,17 @@ def _simulate_param_combo(prices: pd.DataFrame, config: AptetConfig, lookback: i
     ranking_universe = set(config.universe)
     benchmark_symbols = {config.benchmark_ticker} if config.benchmark_ticker else set()
     daily_returns: list[float] = []
+    current_holdings: list[str] | None = None
     for idx in range(start_idx, end_idx):
         ranked_trailing = _get_trailing_returns(prices, idx, lookback, ranking_universe)
         benchmark_trailing = _get_trailing_returns(prices, idx, lookback, benchmark_symbols)
-        selected, weights, _risk_off, _reason = _choose_holdings_for_day(config, ranked_trailing, benchmark_trailing, top_n)
+        selected, weights, risk_off, _reason = _choose_holdings_for_day(
+            config, ranked_trailing, benchmark_trailing, top_n,
+            prices=prices, end_idx_exclusive=idx, lookback_days=lookback, profile=profile,
+            current_holdings=current_holdings,
+        )
+        if not risk_off:
+            current_holdings = list(selected)
         today = prices.iloc[idx]
         tomorrow = prices.iloc[idx + 1]
         period_return = 0.0
@@ -608,6 +760,7 @@ def resolve_aptet_decision(
     end_idx_exclusive: int | None = None,
     previous_selected_top_n: int | None = None,
     adaptation_state: AptetAdaptationState | None = None,
+    current_holdings: list[str] | None = None,
 ) -> tuple[list[str], np.ndarray, bool, str, dict[str, Any]]:
     if not all(pd.api.types.is_float_dtype(dtype) for dtype in prices.dtypes):
         prices = prices.astype("float64", copy=False)
@@ -632,7 +785,7 @@ def resolve_aptet_decision(
             previous_selected_top_n=prior_top_n,
         )
     selected_lookback = int(best["selectedLookbackDays"]) if best else (prior_lookback if prior_lookback is not None else DEFAULT_LOOKBACK_DAYS)
-    selected_top_n = int(best["selectedTopN"]) if best else (prior_top_n if prior_top_n is not None else min(DEFAULT_MIN_HOLDINGS, max(1, len(config.universe))))
+    selected_top_n = int(best["selectedTopN"]) if best else (prior_top_n if prior_top_n is not None else min(config.min_holdings, max(1, len(config.universe))))
     parameter_changed = prior_lookback != selected_lookback or prior_top_n != selected_top_n
     metadata: dict[str, Any] = {
         "selectedLookbackDays": selected_lookback,
@@ -656,6 +809,12 @@ def resolve_aptet_decision(
         "parameterReviewDays": PARAMETER_REVIEW_DAYS,
         "daysSinceParameterChange": len(recent_returns),
         "trailingReturnSinceLastChange5D": trailing_review_return,
+        "absoluteMinHoldings": ABSOLUTE_MIN_HOLDINGS,
+        "selectionReturnWeight": profile.return_weight,
+        "selectionSharpeWeight": profile.sharpe_weight,
+        "maxPairwiseCorrelation": profile.max_pairwise_correlation,
+        "incumbencyMargin": profile.incumbency_margin,
+        "incumbentHoldings": list(current_holdings) if current_holdings else [],
     }
     if view_end < selected_lookback + 1:
         metadata["riskOffReason"] = "no_history"
@@ -664,7 +823,11 @@ def resolve_aptet_decision(
     benchmark_symbols = {config.benchmark_ticker} if config.benchmark_ticker else set()
     ranked_trailing = _get_trailing_returns(prices, view_end, selected_lookback, ranking_universe)
     benchmark_trailing = _get_trailing_returns(prices, view_end, selected_lookback, benchmark_symbols)
-    selected_symbols, weights, risk_off, risk_reason = _choose_holdings_for_day(config, ranked_trailing, benchmark_trailing, selected_top_n)
+    selected_symbols, weights, risk_off, risk_reason = _choose_holdings_for_day(
+        config, ranked_trailing, benchmark_trailing, selected_top_n,
+        prices=prices, end_idx_exclusive=view_end, lookback_days=selected_lookback, profile=profile,
+        current_holdings=current_holdings,
+    )
     if selected_symbols:
         metadata["rankedTrailingReturns"] = {symbol: float(ranked_trailing.get(symbol)) for symbol in selected_symbols if symbol in ranked_trailing.index}
     metadata["riskOffReason"] = risk_reason if risk_off else None
@@ -690,7 +853,7 @@ def run_aptet(bot_id: str, use_db_config: bool = True) -> dict[str, Any]:
                 "interval": config.interval,
                 "target_weights": {fallback: 1.0},
                 "selectedLookbackDays": DEFAULT_LOOKBACK_DAYS,
-                "selectedTopN": min(DEFAULT_MIN_HOLDINGS, max(1, len(config.universe))),
+                "selectedTopN": min(config.min_holdings, max(1, len(config.universe))),
                 "candidateLookbacks": list(profile.candidate_lookbacks),
                 "candidateTopNs": list(candidate_top_ns(config)),
                 "adaptationSpeed": config.adaptation_speed,
@@ -703,20 +866,25 @@ def run_aptet(bot_id: str, use_db_config: bool = True) -> dict[str, Any]:
             },
         }
     adaptation_state: AptetAdaptationState | None = None
+    current_holdings: list[str] | None = None
     if len(prices.index) > 2:
         for index in range(1, len(prices.index) - 1):
-            selected_symbols, weights, _risk_off, _risk_reason, replay_metadata = resolve_aptet_decision(
+            selected_symbols, weights, replay_risk_off, _risk_reason, replay_metadata = resolve_aptet_decision(
                 prices,
                 config,
                 end_idx_exclusive=index,
                 adaptation_state=adaptation_state,
+                current_holdings=current_holdings,
             )
             realized_return = _compute_weighted_period_return(prices.iloc[index], prices.iloc[index + 1], selected_symbols, weights)
             adaptation_state = _advance_adaptation_state(adaptation_state, replay_metadata, realized_return)
+            if not replay_risk_off:
+                current_holdings = list(selected_symbols)
     selected_symbols, weights, risk_off, risk_reason, metadata = resolve_aptet_decision(
         prices,
         config,
         adaptation_state=adaptation_state,
+        current_holdings=current_holdings,
     )
     asof = prices.index[-1]
     target_weights = {symbol: float(weight) for symbol, weight in zip(selected_symbols, weights)}
