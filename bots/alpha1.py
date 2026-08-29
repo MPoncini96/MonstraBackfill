@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from functools import cmp_to_key
 from typing import Any
 
 import numpy as np
@@ -29,6 +30,14 @@ USE_CASH_EQUIVALENT_FALLBACK = True
 DEFAULT_TRANSACTION_COST_BPS = 5.0
 DEFAULT_SLIPPAGE_BPS = 5.0
 
+# Turnover buffer: a currently-held name (and its rank position, since
+# positions carry fixed weights like 40/30/20/10) is only displaced or
+# reordered if a rival's trailing return clears its own return by more than
+# this fraction of its own return's magnitude. Prevents both membership
+# churn (swapping which stocks are held) and weight-only churn (the same
+# holdings reshuffling rank position on noise).
+DEFAULT_INCUMBENCY_MARGIN = 0.15
+
 
 @dataclass
 class Alpha1Config:
@@ -45,6 +54,7 @@ class Alpha1Config:
     benchmark_return_threshold: float = 0.0
     transaction_cost_bps: float = DEFAULT_TRANSACTION_COST_BPS
     slippage_bps: float = DEFAULT_SLIPPAGE_BPS
+    incumbency_margin: float = DEFAULT_INCUMBENCY_MARGIN
     rank_weights: np.ndarray = field(default_factory=lambda: DEFAULT_WEIGHTS.copy())
 
 
@@ -205,6 +215,7 @@ def _build_live_config(bot_id: str, use_db_config: bool = True) -> tuple[Alpha1C
             benchmark_return_threshold=_safe_float(config_data.get("benchmark_return_threshold"), 0.0),
             transaction_cost_bps=_safe_float(config_data.get("transaction_cost_bps"), DEFAULT_TRANSACTION_COST_BPS),
             slippage_bps=_safe_float(config_data.get("slippage_bps"), DEFAULT_SLIPPAGE_BPS),
+            incumbency_margin=_safe_float(config_data.get("incumbency_margin"), DEFAULT_INCUMBENCY_MARGIN),
             rank_weights=rank_w,
         )
     else:
@@ -365,14 +376,56 @@ def _evaluate_kill_switch(
     return False, "risk_on"
 
 
+def _rank_with_stability(
+    ranked_trailing: pd.Series,
+    top_n: int,
+    current_holdings: list[str] | None,
+    margin: float,
+) -> list[str]:
+    """Order candidates into the final top_n, defending both a currently-held
+    name's membership AND its relative rank position (since position carries
+    a fixed weight like 40/30/20/10) unless a rival clears its margin."""
+    if ranked_trailing.empty:
+        return []
+    returns = ranked_trailing.to_dict()
+    prev_rank = {symbol: idx for idx, symbol in enumerate(current_holdings or []) if symbol in returns}
+
+    def cushion(symbol: str) -> float:
+        r = returns[symbol]
+        return r + margin * abs(r)
+
+    def before(a: str, b: str) -> bool:
+        a_rank, b_rank = prev_rank.get(a), prev_rank.get(b)
+        if a_rank is not None and b_rank is not None:
+            senior, junior = (a, b) if a_rank < b_rank else (b, a)
+            junior_wins = returns[junior] > cushion(senior)
+            return (senior == a) != junior_wins
+        if a_rank is not None:
+            return not (returns[b] > cushion(a))
+        if b_rank is not None:
+            return returns[a] > cushion(b)
+        return returns[a] > returns[b]
+
+    def compare(a: str, b: str) -> int:
+        if a == b:
+            return 0
+        return -1 if before(a, b) else 1
+
+    ordered = sorted(returns.keys(), key=cmp_to_key(compare))
+    return ordered[:top_n]
+
+
 def _choose_risk_on_holdings(
-    ranked_trailing: pd.Series, top_n: int, rank_weights: np.ndarray
+    ranked_trailing: pd.Series,
+    top_n: int,
+    rank_weights: np.ndarray,
+    current_holdings: list[str] | None = None,
+    incumbency_margin: float = DEFAULT_INCUMBENCY_MARGIN,
 ) -> tuple[list[str], np.ndarray]:
     if ranked_trailing.empty:
         return [], np.array([], dtype=float)
 
-    ranked = ranked_trailing.sort_values(ascending=False)
-    selected = ranked.head(top_n).index.tolist()
+    selected = _rank_with_stability(ranked_trailing, top_n, current_holdings, incumbency_margin)
     rw = np.asarray(rank_weights, dtype=float)
     weights = rw[: len(selected)].copy()
 
@@ -388,6 +441,7 @@ def _choose_holdings_for_day(
     ranked_trailing: pd.Series,
     benchmark_trailing: pd.Series,
     cash_trailing: pd.Series,
+    current_holdings: list[str] | None = None,
 ) -> tuple[list[str], np.ndarray, bool, str]:
     risk_off, reason = _evaluate_kill_switch(
         config=config,
@@ -402,7 +456,11 @@ def _choose_holdings_for_day(
         return [], np.array([], dtype=float), True, reason
 
     selected, weights = _choose_risk_on_holdings(
-        ranked_trailing, int(config.top_n or DEFAULT_TOP_N), config.rank_weights
+        ranked_trailing,
+        int(config.top_n or DEFAULT_TOP_N),
+        config.rank_weights,
+        current_holdings=current_holdings,
+        incumbency_margin=config.incumbency_margin,
     )
 
     if not selected and USE_CASH_EQUIVALENT_FALLBACK and config.cash_equivalent:
@@ -459,6 +517,31 @@ def run_alpha1(
     benchmark_symbols = {config.benchmark} if config.benchmark else set()
     cash_symbols = {config.cash_equivalent} if config.cash_equivalent else set()
 
+    # run_alpha1 has no adaptation state to replay (fixed lookback/top_n), so
+    # rather than reconstructing full history, take one step back to see
+    # what today's same config would have selected yesterday and use that as
+    # the incumbent baseline the turnover buffer defends.
+    current_holdings: list[str] | None = None
+    if len(prices.index) > 2:
+        prior_ranked = _get_trailing_returns(
+            prices=prices, end_idx_exclusive=len(prices.index) - 1,
+            lookback_days=config.lookback_days, symbols=ranking_universe,
+        )
+        prior_benchmark = _get_trailing_returns(
+            prices=prices, end_idx_exclusive=len(prices.index) - 1,
+            lookback_days=config.lookback_days, symbols=benchmark_symbols,
+        )
+        prior_cash = _get_trailing_returns(
+            prices=prices, end_idx_exclusive=len(prices.index) - 1,
+            lookback_days=config.lookback_days, symbols=cash_symbols,
+        )
+        prior_selected, _prior_weights, prior_risk_off, _prior_reason = _choose_holdings_for_day(
+            config=config, ranked_trailing=prior_ranked,
+            benchmark_trailing=prior_benchmark, cash_trailing=prior_cash,
+        )
+        if not prior_risk_off:
+            current_holdings = prior_selected
+
     ranked_trailing = _get_trailing_returns(
         prices=prices,
         end_idx_exclusive=len(prices.index),
@@ -483,6 +566,7 @@ def run_alpha1(
         ranked_trailing=ranked_trailing,
         benchmark_trailing=benchmark_trailing,
         cash_trailing=cash_trailing,
+        current_holdings=current_holdings,
     )
 
     asof = prices.index[-1]
@@ -522,6 +606,8 @@ def run_alpha1(
             "benchmark_return_threshold": config.benchmark_return_threshold,
             "transaction_cost_bps": config.transaction_cost_bps,
             "slippage_bps": config.slippage_bps,
+            "incumbency_margin": config.incumbency_margin,
+            "incumbent_holdings": current_holdings or [],
             "rank_weights": [float(x) for x in config.rank_weights.tolist()],
             "weight_model": "rank_weights",
             "timing": "rank_on_t_minus_1_apply_return_on_t",

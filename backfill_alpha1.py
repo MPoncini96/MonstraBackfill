@@ -27,6 +27,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from datetime import date
+from functools import cmp_to_key
 from typing import Any, Iterable, Sequence
 
 import numpy as np
@@ -67,6 +68,12 @@ USE_CASH_EQUIVALENT_FALLBACK = True
 DEFAULT_TRANSACTION_COST_BPS = 5.0
 DEFAULT_SLIPPAGE_BPS = 5.0
 
+# Turnover buffer: a currently-held name (and its rank position, since
+# positions carry fixed weights like 40/30/20/10) is only displaced or
+# reordered if a rival's trailing return clears its own return by more than
+# this fraction of its own return's magnitude. Mirrors bots/alpha1.py.
+DEFAULT_INCUMBENCY_MARGIN = 0.15
+
 # Bulk DB write size
 UPSERT_BATCH_SIZE = 500
 
@@ -104,6 +111,7 @@ class Alpha1BotConfig:
     # Cost model
     transaction_cost_bps: float = DEFAULT_TRANSACTION_COST_BPS
     slippage_bps: float = DEFAULT_SLIPPAGE_BPS
+    incumbency_margin: float = DEFAULT_INCUMBENCY_MARGIN
 
 
 @dataclass
@@ -638,14 +646,57 @@ def evaluate_kill_switch(
     return False, "risk_on"
 
 
+def rank_with_stability(
+    ranked_trailing: pd.Series,
+    top_n: int,
+    current_holdings: list[str] | None,
+    margin: float,
+) -> list[str]:
+    """Order candidates into the final top_n, defending both a currently-held
+    name's membership AND its relative rank position (since position carries
+    a fixed weight like 40/30/20/10) unless a rival clears its margin.
+    Mirrors bots/alpha1.py's _rank_with_stability."""
+    if ranked_trailing.empty:
+        return []
+    returns = ranked_trailing.to_dict()
+    prev_rank = {symbol: idx for idx, symbol in enumerate(current_holdings or []) if symbol in returns}
+
+    def cushion(symbol: str) -> float:
+        r = returns[symbol]
+        return r + margin * abs(r)
+
+    def before(a: str, b: str) -> bool:
+        a_rank, b_rank = prev_rank.get(a), prev_rank.get(b)
+        if a_rank is not None and b_rank is not None:
+            senior, junior = (a, b) if a_rank < b_rank else (b, a)
+            junior_wins = returns[junior] > cushion(senior)
+            return (senior == a) != junior_wins
+        if a_rank is not None:
+            return not (returns[b] > cushion(a))
+        if b_rank is not None:
+            return returns[a] > cushion(b)
+        return returns[a] > returns[b]
+
+    def compare(a: str, b: str) -> int:
+        if a == b:
+            return 0
+        return -1 if before(a, b) else 1
+
+    ordered = sorted(returns.keys(), key=cmp_to_key(compare))
+    return ordered[:top_n]
+
+
 def choose_risk_on_holdings(
-    ranked_trailing: pd.Series, top_n: int, rank_weights: np.ndarray
+    ranked_trailing: pd.Series,
+    top_n: int,
+    rank_weights: np.ndarray,
+    current_holdings: list[str] | None = None,
+    incumbency_margin: float = DEFAULT_INCUMBENCY_MARGIN,
 ) -> tuple[list[str], np.ndarray]:
     if ranked_trailing.empty:
         return [], np.array([], dtype=float)
 
-    ranked = ranked_trailing.sort_values(ascending=False)
-    selected = ranked.head(top_n).index.tolist()
+    selected = rank_with_stability(ranked_trailing, top_n, current_holdings, incumbency_margin)
 
     rw = np.asarray(rank_weights, dtype=float)[: len(selected)].copy()
     if rw.size == 0:
@@ -661,6 +712,7 @@ def choose_holdings_for_day(
     benchmark_trailing: pd.Series,
     cash_trailing: pd.Series,
     effective_top_n: int,
+    current_holdings: list[str] | None = None,
 ) -> tuple[list[str], np.ndarray, bool, str]:
     risk_off, reason = evaluate_kill_switch(
         bot=bot,
@@ -674,7 +726,10 @@ def choose_holdings_for_day(
             return [bot.cash_equivalent], np.array([1.0], dtype=float), True, reason
         return [], np.array([], dtype=float), True, reason
 
-    selected, weights = choose_risk_on_holdings(ranked_trailing, effective_top_n, bot.rank_weights)
+    selected, weights = choose_risk_on_holdings(
+        ranked_trailing, effective_top_n, bot.rank_weights,
+        current_holdings=current_holdings, incumbency_margin=bot.incumbency_margin,
+    )
 
     if not selected and USE_CASH_EQUIVALENT_FALLBACK and bot.cash_equivalent:
         return [bot.cash_equivalent], np.array([1.0], dtype=float), True, "fallback:no_selected_symbols"
@@ -769,6 +824,7 @@ def build_holdings_payload(
         "turnover": float(turnover),
         "transaction_cost_bps": float(bot.transaction_cost_bps),
         "slippage_bps": float(bot.slippage_bps),
+        "incumbency_margin": float(bot.incumbency_margin),
         "cost_drag": float(cost_drag),
     }
     return json.dumps(payload)
@@ -872,6 +928,7 @@ def backfill_single_bot(bot: Alpha1BotConfig) -> dict[str, Any]:
                 benchmark_trailing=benchmark_trailing,
                 cash_trailing=cash_trailing,
                 effective_top_n=effective_top_n,
+                current_holdings=list(prev_holdings.keys()),
             )
 
             if risk_off:

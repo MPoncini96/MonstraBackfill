@@ -207,6 +207,7 @@ def run_preview(preview: PreviewConfig) -> dict[str, Any]:
             ranked_trailing=ranked_trailing,
             benchmark_trailing=benchmark_trailing,
             cash_trailing=cash_trailing,
+            current_holdings=list(prev_holdings.keys()),
         )
 
         if risk_off:
