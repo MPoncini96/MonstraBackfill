@@ -300,6 +300,8 @@ def discover_pairs(
     rows: list[dict] = []
     for leader in tickers:
         for follower in tickers:
+            if leader == follower:
+                continue
             for lag_days in cfg.lag_range:
                 for return_period in cfg.return_period_range:
                     if lag_days < return_period:
