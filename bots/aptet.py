@@ -786,6 +786,10 @@ def resolve_aptet_decision(
         )
     selected_lookback = int(best["selectedLookbackDays"]) if best else (prior_lookback if prior_lookback is not None else DEFAULT_LOOKBACK_DAYS)
     selected_top_n = int(best["selectedTopN"]) if best else (prior_top_n if prior_top_n is not None else min(config.min_holdings, max(1, len(config.universe))))
+    # A prior_top_n can be a value persisted before ABSOLUTE_MIN_HOLDINGS was
+    # raised (or from a since-grown universe); "hold_current_parameters" must
+    # not let that stale value bypass today's floor.
+    selected_top_n = max(int(config.min_holdings), min(int(config.max_holdings), selected_top_n))
     parameter_changed = prior_lookback != selected_lookback or prior_top_n != selected_top_n
     metadata: dict[str, Any] = {
         "selectedLookbackDays": selected_lookback,
