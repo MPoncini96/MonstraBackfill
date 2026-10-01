@@ -27,7 +27,6 @@ import os
 import sys
 from dataclasses import dataclass, field
 from datetime import date
-from functools import cmp_to_key
 from typing import Any, Iterable, Sequence
 
 import numpy as np
@@ -655,7 +654,10 @@ def rank_with_stability(
     """Order candidates into the final top_n, defending both a currently-held
     name's membership AND its relative rank position (since position carries
     a fixed weight like 40/30/20/10) unless a rival clears its margin.
-    Mirrors bots/alpha1.py's _rank_with_stability."""
+    Mirrors bots/alpha1.py's _rank_with_stability -- see that module for why
+    this is an explicit most-senior-first insertion rather than a comparator
+    fed to sorted() (the latter can cycle with 3+ incumbents, making the
+    result depend on input order instead of the data)."""
     if ranked_trailing.empty:
         return []
     returns = ranked_trailing.to_dict()
@@ -665,24 +667,19 @@ def rank_with_stability(
         r = returns[symbol]
         return r + margin * abs(r)
 
-    def before(a: str, b: str) -> bool:
-        a_rank, b_rank = prev_rank.get(a), prev_rank.get(b)
-        if a_rank is not None and b_rank is not None:
-            senior, junior = (a, b) if a_rank < b_rank else (b, a)
-            junior_wins = returns[junior] > cushion(senior)
-            return (senior == a) != junior_wins
-        if a_rank is not None:
-            return not (returns[b] > cushion(a))
-        if b_rank is not None:
-            return returns[a] > cushion(b)
-        return returns[a] > returns[b]
+    def defense_threshold(symbol: str) -> float:
+        return cushion(symbol) if symbol in prev_rank else returns[symbol]
 
-    def compare(a: str, b: str) -> int:
-        if a == b:
-            return 0
-        return -1 if before(a, b) else 1
+    incumbents = sorted(prev_rank.keys(), key=lambda s: prev_rank[s])
+    challengers = sorted((s for s in returns if s not in prev_rank), key=lambda s: (-returns[s], s))
 
-    ordered = sorted(returns.keys(), key=cmp_to_key(compare))
+    ordered: list[str] = []
+    for symbol in incumbents + challengers:
+        pos = len(ordered)
+        while pos > 0 and returns[symbol] > defense_threshold(ordered[pos - 1]):
+            pos -= 1
+        ordered.insert(pos, symbol)
+
     return ordered[:top_n]
 
 

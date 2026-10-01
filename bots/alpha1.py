@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from functools import cmp_to_key
 from typing import Any
 
 import numpy as np
@@ -384,7 +383,12 @@ def _rank_with_stability(
 ) -> list[str]:
     """Order candidates into the final top_n, defending both a currently-held
     name's membership AND its relative rank position (since position carries
-    a fixed weight like 40/30/20/10) unless a rival clears its margin."""
+    a fixed weight like 40/30/20/10) unless a rival clears its margin.
+
+    Implemented as an explicit most-senior-first insertion (not a comparator
+    fed to sorted()) so the result can't depend on input order -- see
+    Monstra-Worker/bots/alpha1.py's _rank_with_stability for why (a
+    senior-defends-via-own-cushion comparator can cycle with 3+ incumbents)."""
     if ranked_trailing.empty:
         return []
     returns = ranked_trailing.to_dict()
@@ -394,24 +398,19 @@ def _rank_with_stability(
         r = returns[symbol]
         return r + margin * abs(r)
 
-    def before(a: str, b: str) -> bool:
-        a_rank, b_rank = prev_rank.get(a), prev_rank.get(b)
-        if a_rank is not None and b_rank is not None:
-            senior, junior = (a, b) if a_rank < b_rank else (b, a)
-            junior_wins = returns[junior] > cushion(senior)
-            return (senior == a) != junior_wins
-        if a_rank is not None:
-            return not (returns[b] > cushion(a))
-        if b_rank is not None:
-            return returns[a] > cushion(b)
-        return returns[a] > returns[b]
+    def defense_threshold(symbol: str) -> float:
+        return cushion(symbol) if symbol in prev_rank else returns[symbol]
 
-    def compare(a: str, b: str) -> int:
-        if a == b:
-            return 0
-        return -1 if before(a, b) else 1
+    incumbents = sorted(prev_rank.keys(), key=lambda s: prev_rank[s])
+    challengers = sorted((s for s in returns if s not in prev_rank), key=lambda s: (-returns[s], s))
 
-    ordered = sorted(returns.keys(), key=cmp_to_key(compare))
+    ordered: list[str] = []
+    for symbol in incumbents + challengers:
+        pos = len(ordered)
+        while pos > 0 and returns[symbol] > defense_threshold(ordered[pos - 1]):
+            pos -= 1
+        ordered.insert(pos, symbol)
+
     return ordered[:top_n]
 
 
