@@ -175,6 +175,36 @@ ALGORITHM_REGISTRY: tuple[AlgorithmEntry, ...] = (
     # Locked regression targets and portfolio/risk state persist in
     # trading.draco_state (see bots/draco.py + migrations/create_draco_tables.sql),
     # never held only in worker process memory.
+    # ---------------------------------------------------------------------------
+    # bibo — Phase 1: scaffolding + backtest infra only (see
+    # C:\Users\mjpon\.claude\plans\encapsulated-launching-teacup.md). Ranks
+    # top_n by tag score (bibo_tag_scoring.compute_tag_score: MIN of a bot's
+    # selected tags' trading."Vector" composite scores) instead of Force's
+    # trailing return, reusing Force's tiered weights / incumbency margin /
+    # kill switch mechanics (see bots/bibo.py).
+    #
+    # backfill_enabled=False like delta1: this repo enforces "hidden entries
+    # don't run backfills" (see tests/test_algorithm_registry.py's
+    # test_hidden_entries_not_backfill_enabled) even though backfill_bibo.py
+    # and scripts/backtest_bibo_tag_combos.py already exist in Phase 1 - they
+    # run as standalone scripts for evidence generation, not through a
+    # registered backfill dispatcher (no register_backfill_dispatcher("bibo",
+    # ...) call exists). live_enabled/brokerage_eligible/user_creatable stay
+    # False until backtest evidence justifies promotion; see
+    # ADDING_NEW_ALGORITHM.md + worker.py's register_live_runner for that path.
+    # ---------------------------------------------------------------------------
+    AlgorithmEntry(
+        slug="bibo",
+        display_name="Bibo",
+        alias="Bibo",
+        worker_minute_offset=8,
+        fallback_bot_ids=[],
+        backfill_enabled=False,
+        live_enabled=False,
+        brokerage_eligible=False,
+        user_creatable=False,
+        status="hidden",
+    ),
     AlgorithmEntry(
         slug="draco",
         display_name="Draco",
@@ -186,6 +216,21 @@ ALGORITHM_REGISTRY: tuple[AlgorithmEntry, ...] = (
         brokerage_eligible=False,
         user_creatable=True,
         status="active",
+    ),
+    # tide -- long-hold Force variant; hidden/Phase-1, same posture as
+    # bibo/delta1 at launch. See Monstra-Worker/algorithm_registry.py for
+    # the full rationale (this file mirrors that canonical copy).
+    AlgorithmEntry(
+        slug="tide",
+        display_name="Tide",
+        alias="Tide",
+        worker_minute_offset=9,
+        fallback_bot_ids=[],
+        backfill_enabled=False,
+        live_enabled=False,
+        brokerage_eligible=False,
+        user_creatable=False,
+        status="hidden",
     ),
 )
 
